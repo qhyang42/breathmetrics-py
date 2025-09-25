@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "breathmetrics"
+version = "0.1.0"
+description = "Breathing signal parameterization and feature extraction (Python port of BreathMetrics)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+authors = [{ name = "Qiaohan Yang, Adam Dede, Torben Noto" }]
+
+dependencies = [
+  "numpy>=1.26",
+  "scipy>=1.11",
+  "pandas>=2.0",
+  "matplotlib>=3.8",
+  "typer>=0.12" # CLI helper
+]
+
+[project.urls]
+Homepage = "https://github.com/yourname/breathmetrics"
+Issues = "https://github.com/yourname/breathmetrics/issues"
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff", "black", "pre-commit"]
+
+[project.scripts]
+breathmetrics = "breathmetrics.cli:app"
+
+# Tell setuptools we use the src/ layout
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
