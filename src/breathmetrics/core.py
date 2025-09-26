@@ -3,6 +3,7 @@ import numpy as np
 from dataclasses import dataclass
 
 
+## TODO this needs to be built block by block. no clusterfuck dumping. keep things clean.
 @dataclass
 class BreathMetricsConfig:
     fs: float  # sampling rate (Hz)
