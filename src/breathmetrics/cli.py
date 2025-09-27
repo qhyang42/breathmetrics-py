@@ -5,6 +5,11 @@ from .core import BreathMetrics, BreathMetricsConfig
 app = typer.Typer(help="BreathMetrics CLI")
 
 
+## desired CLI functionality:
+# quickstart: run a tiny demo on synthetic data
+# launch GUI
+# run: run all steps on a given data file
+# light utilites: e.g. convert file formats, plot data, etc.
 @app.command()
 def quickstart(fs: float = 100.0, seconds: float = 10.0):
     """Run a tiny demo on synthetic data."""
