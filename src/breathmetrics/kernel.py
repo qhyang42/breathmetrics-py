@@ -9,6 +9,8 @@ from numpy.typing import ArrayLike
 # kernel.py  (pure function)
 from .utils import detrend_linear, fft_smooth, zscore
 
+# TODO: all the functions here need tests.
+
 
 def correct_respiration_to_baseline(
     resp: np.ndarray,
@@ -75,7 +77,7 @@ def _find_respiratory_extrema_basic(
         return peaks.astype(int), troughs.astype(int)
 
 
-## TODO debug this. needs tests.
+# find extrema with sliding window voting
 def find_respiratory_extrema(
     resp: ArrayLike,
     srate: float,
@@ -255,8 +257,7 @@ def find_respiratory_extrema(
     return corrected_peaks, corrected_troughs
 
 
-## find pauses and onsets
-## TODO: test this.
+## find pauses and onsets. This might need to be updated to our new methods.
 def find_respiratory_pauses_and_onsets(
     resp: ArrayLike,
     fs: float,
@@ -318,6 +319,188 @@ def find_respiratory_pauses_and_onsets(
 
 
 ## find resp offsets
+def find_respiratory_offsets(
+    resp: ArrayLike,
+    inhale_onsets: ArrayLike,
+    exhale_onsets: ArrayLike,
+    inhale_pause_onsets: ArrayLike,
+    exhale_pause_onsets: ArrayLike,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Port of MATLAB findRespiratoryOffsets.m (object-free).
+    Returns (inhale_offsets, exhale_offsets).
+    - Inhale offset i: exhaleOnsets[i]-1 unless inhalePauseOnsets[i] is present,
+      then inhalePauseOnsets[i]-1.
+    - Exhale offset i (for all but the last): next inhale onset - 1, unless
+      exhalePauseOnsets[i] is present, then exhalePauseOnsets[i]-1.
+    - Final exhale offset: first positive slope after last exhale onset,
+      accepted only if its distance lies within [avg/4, 1.75*avg] where avg is
+      the mean exhale duration from all previous exhales. Otherwise NaN.
+    """
+    x = np.asarray(resp, dtype=float).ravel()
+    inh_on = np.asarray(inhale_onsets, dtype=int).ravel()
+    exh_on = np.asarray(exhale_onsets, dtype=int).ravel()
+    inh_pause = np.asarray(inhale_pause_onsets, dtype=float).ravel()
+    exh_pause = np.asarray(exhale_pause_onsets, dtype=float).ravel()
+
+    # Outputs: match MATLAB shapes (inhale offsets sized like exhale onsets)
+    inhale_offsets = np.zeros_like(exh_on, dtype=int)
+    exhale_offsets = np.zeros_like(exh_on, dtype=float)  # last can be NaN
+
+    # ---- Inhale offsets ----
+    # for bi = 1:length(exhaleOnsets)
+    for bi in range(exh_on.size):
+        if np.isnan(inh_pause[bi]):
+            inhale_offsets[bi] = exh_on[bi] - 1
+        else:
+            inhale_offsets[bi] = int(inh_pause[bi]) - 1
+
+    # ---- Exhale offsets (all but last) ----
+    # exhale i ends at exhalePauseOnsets[i]-1 if present; else just before next inhale onset
+    for bi in range(exh_on.size - 1):
+        if np.isnan(exh_pause[bi]):
+            exhale_offsets[bi] = inh_on[bi + 1] - 1
+        else:
+            exhale_offsets[bi] = int(exh_pause[bi]) - 1
+
+    # ---- Final exhale offset (last breath) ----
+    if exh_on.size > 0:
+        last = exh_on.size - 1
+        start = exh_on[last]
+        putative = None
+        if start < x.size - 1:
+            # This mirrors your `putativeExhaleOffset = find(final_window>0,1,'first');`
+            # with final_window taken as the *slope* after the last exhale onset.
+            dx = np.diff(x[start:])
+            pos = np.flatnonzero(dx > 0)
+            if pos.size:
+                putative = int(pos[0] + 1)  # +1 to map diff-index to signal index
+
+        # avg exhale length from all completed (non-final) exhales
+        if exh_on.size > 1:
+            avg_len = float(np.mean(exhale_offsets[:last] - exh_on[:last]))
+        else:
+            avg_len = np.nan
+
+        if putative is None or not np.isfinite(avg_len):
+            exhale_offsets[last] = np.nan
+        else:
+            lower = avg_len / 4.0
+            upper = avg_len * 1.75
+            if putative < lower or putative >= upper:
+                exhale_offsets[last] = np.nan
+            else:
+                exhale_offsets[last] = exh_on[last] + putative - 1
+
+    return inhale_offsets, exhale_offsets
+
+
+# find breath durations
+def find_breath_durations(
+    inhale_onsets: ArrayLike,
+    inhale_offsets: ArrayLike,
+    exhale_onsets: ArrayLike,
+    exhale_offsets: ArrayLike,
+    fs: float,
+    *,
+    drop_invalid: bool = False,
+) -> dict[str, np.ndarray]:
+    """
+    Compute per-breath durations from paired onsets/offsets.
+
+    Definitions (per breath i)
+    --------------------------
+    inhale_duration_s  = (inhale_offset[i] - inhale_onset[i]) / fs
+    exhale_duration_s  = (exhale_offset[i] - exhale_onset[i]) / fs
+    cycle_duration_s   = (inhale_onset[i+1] - inhale_onset[i]) / fs    # next inhale begins breath i+1
+    ie_ratio           = inhale_duration_s / exhale_duration_s
+
+    Notes
+    -----
+    - Arrays are truncated to the maximum number of *complete* pairs.
+    - If the final exhale_offset is NaN (common), the final exhale duration
+      is set to NaN and the validity mask marks it as invalid.
+    - Negative or zero-length durations are marked invalid.
+    - If `drop_invalid=True`, invalid rows are removed from all outputs.
+
+    Returns
+    -------
+    dict with float arrays (aligned in length):
+      - "inhale_duration_s"
+      - "exhale_duration_s"
+      - "cycle_duration_s"      (shorter by one breath; last is NaN to align)
+      - "ie_ratio"
+      - "valid"                 (boolean mask per row before any dropping)
+      - "index"                 (original breath indices kept after truncation)
+    """
+    inh_on = np.asarray(inhale_onsets, dtype=float).ravel()
+    inh_off = np.asarray(inhale_offsets, dtype=float).ravel()
+    exh_on = np.asarray(exhale_onsets, dtype=float).ravel()
+    exh_off = np.asarray(exhale_offsets, dtype=float).ravel()
+
+    # Number of breaths we can form with *all four* markers
+    n_pairs = int(min(inh_on.size, inh_off.size, exh_on.size, exh_off.size))
+    if n_pairs == 0:
+        empty = np.array([], dtype=float)
+        return {
+            "inhale_duration_s": empty,
+            "exhale_duration_s": empty,
+            "cycle_duration_s": empty,
+            "ie_ratio": empty,
+            "valid": np.array([], dtype=bool),
+            "index": np.array([], dtype=int),
+        }
+
+    # Truncate to complete pairs
+    inh_on = inh_on[:n_pairs]
+    inh_off = inh_off[:n_pairs]
+    exh_on = exh_on[:n_pairs]
+    exh_off = exh_off[:n_pairs]
+
+    # Durations (seconds)
+    with np.errstate(invalid="ignore"):
+        inhale_duration_s = (inh_off - inh_on) / fs
+        exhale_duration_s = (exh_off - exh_on) / fs
+
+    # Cycle duration: from inhale onset i to inhale onset i+1
+    cycle_duration_s = np.full_like(inhale_duration_s, np.nan, dtype=float)
+    if inh_on.size >= 2:
+        cycle_duration_s[:-1] = (inh_on[1:] - inh_on[:-1]) / fs
+
+    # I:E ratio
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ie_ratio = inhale_duration_s / exhale_duration_s
+
+    # Validity checks (monotonic ordering + positive durations)
+    valid = np.isfinite(inhale_duration_s) & np.isfinite(exhale_duration_s)
+    valid &= (inh_on < inh_off) & (inh_off <= exh_on) & (exh_on < exh_off)
+    valid &= (inhale_duration_s > 0) & (exhale_duration_s > 0)
+
+    # Optional: drop invalid rows across all outputs
+    if drop_invalid:
+        idx = np.nonzero(valid)[0]
+        inhale_duration_s = inhale_duration_s[idx]
+        exhale_duration_s = exhale_duration_s[idx]
+
+        # For cycle durations, keep entries where both i and i+1 breaths survived.
+        # A simple way is to recompute from the filtered onsets if you keep them around.
+        # Here we approximate by selecting the same indices and leaving NaN where ambiguous.
+        cycle_duration_s = cycle_duration_s[idx]
+        ie_ratio = ie_ratio[idx]
+        valid = np.ones_like(inhale_duration_s, dtype=bool)
+        index = idx.astype(int)
+    else:
+        index = np.arange(n_pairs, dtype=int)
+
+    return {
+        "inhale_duration_s": inhale_duration_s.astype(float),
+        "exhale_duration_s": exhale_duration_s.astype(float),
+        "cycle_duration_s": cycle_duration_s.astype(float),
+        "ie_ratio": ie_ratio.astype(float),
+        "valid": valid.astype(bool),
+        "index": index,
+    }
+
 
 ## find resp volume
 ## calculate secondary features

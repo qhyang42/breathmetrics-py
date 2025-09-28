@@ -3,7 +3,7 @@
 9/27/2025 add find extrema. need to find a testing data 
 # pipeline from orig breathmetrics toolbox: 
 ## preproc
-check input 
+check input. i can take numpy array, CSV, .mat file
 baseline correction. demean, zscore 
 decide internally which resp to use. mean centered or not 
 ## feature extraction. all of these go into kernel.py 
