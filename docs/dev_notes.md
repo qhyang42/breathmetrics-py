@@ -1,22 +1,29 @@
 # development notes for breathmetrics python
 9/26/2025 scaffolding built. started building helper function. no test performed yet. 
 9/27/2025 add find extrema. need to find a testing data 
+
+
+
+
 # pipeline from orig breathmetrics toolbox: 
 ## preproc
-check input. i can take numpy array, CSV, .mat file
+check input. i can take numpy array, CSV, .mat file. reshape to single vector 
+optional input: crude inhale marker as a vec of sample number 
 baseline correction. demean, zscore 
 decide internally which resp to use. mean centered or not 
 ## feature extraction. all of these go into kernel.py 
+### primary 
 find extrema. *wrote, no test*
 find onsets and pauses. this will have to be modified to new functions *wrote, no test*
-find inhale and exhale offsets 
+find inhale and exhale offsets *wrote, no test*
 find pause 
 calculate inhale and exhale volume 
+### secondary 
 calculate secondary features 
 calculate resp phase 
 print secondary features (util?)
 check if features are estimated (util?)
-## ERPs 
+## ERPs and summary stats 
 calculate ERP 
 calculate resampled ERP 
 ## plotting 
