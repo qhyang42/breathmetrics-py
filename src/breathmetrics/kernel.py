@@ -40,41 +40,39 @@ def correct_respiration_to_baseline(
 
 
 ## find extrema
-# kernel.py
+# don't know why this is here. could be useless. qy 9/29/2025. ---ignore---
+# def _find_respiratory_extrema_basic(
+#     signal: np.ndarray,
+#     distance: int | None = None,
+#     prominence: float | None = None,
+# ) -> tuple[np.ndarray, np.ndarray]:
+#     """
+#     Find local maxima ('peaks') and minima ('troughs').
+#     Uses scipy.signal.find_peaks if available; otherwise a simple NumPy fallback.
+#     Returns (peaks_idx, troughs_idx) as integer arrays.
+#     """
+#     x = np.asarray(signal, dtype=float)
 
+#     try:
+#         from scipy.signal import find_peaks  # optional
 
-def _find_respiratory_extrema_basic(
-    signal: np.ndarray,
-    distance: int | None = None,
-    prominence: float | None = None,
-) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Find local maxima ('peaks') and minima ('troughs').
-    Uses scipy.signal.find_peaks if available; otherwise a simple NumPy fallback.
-    Returns (peaks_idx, troughs_idx) as integer arrays.
-    """
-    x = np.asarray(signal, dtype=float)
-
-    try:
-        from scipy.signal import find_peaks  # optional
-
-        peaks, _ = find_peaks(x, distance=distance, prominence=prominence)
-        troughs, _ = find_peaks(-x, distance=distance, prominence=prominence)
-        return peaks.astype(int), troughs.astype(int)
-    except Exception:
-        # Fallback: strict neighbor test
-        # A point i is a local max if x[i-1] < x[i] > x[i+1]; min if x[i-1] > x[i] < x[i+1]
-        if x.size < 3:
-            return np.array([], dtype=int), np.array([], dtype=int)
-        dx1 = x[1:-1] - x[:-2]
-        dx2 = x[1:-1] - x[2:]
-        peaks = np.where((dx1 > 0) & (dx2 > 0))[0] + 1
-        troughs = np.where((dx1 < 0) & (dx2 < 0))[0] + 1
-        if distance and distance > 1:
-            # crude distance enforcement: keep every 'distance'-th candidate
-            peaks = peaks[:: max(1, int(distance))]
-            troughs = troughs[:: max(1, int(distance))]
-        return peaks.astype(int), troughs.astype(int)
+#         peaks, _ = find_peaks(x, distance=distance, prominence=prominence)
+#         troughs, _ = find_peaks(-x, distance=distance, prominence=prominence)
+#         return peaks.astype(int), troughs.astype(int)
+#     except Exception:
+#         # Fallback: strict neighbor test
+#         # A point i is a local max if x[i-1] < x[i] > x[i+1]; min if x[i-1] > x[i] < x[i+1]
+#         if x.size < 3:
+#             return np.array([], dtype=int), np.array([], dtype=int)
+#         dx1 = x[1:-1] - x[:-2]
+#         dx2 = x[1:-1] - x[2:]
+#         peaks = np.where((dx1 > 0) & (dx2 > 0))[0] + 1
+#         troughs = np.where((dx1 < 0) & (dx2 < 0))[0] + 1
+#         if distance and distance > 1:
+#             # crude distance enforcement: keep every 'distance'-th candidate
+#             peaks = peaks[:: max(1, int(distance))]
+#             troughs = troughs[:: max(1, int(distance))]
+#         return peaks.astype(int), troughs.astype(int)
 
 
 # find extrema with sliding window voting
@@ -258,6 +256,7 @@ def find_respiratory_extrema(
 
 
 ## find pauses and onsets. This might need to be updated to our new methods.
+## TODO: scratch and rewrite this. doesn't work. qy 9/29/2025
 def find_respiratory_pauses_and_onsets(
     resp: ArrayLike,
     fs: float,
@@ -265,7 +264,7 @@ def find_respiratory_pauses_and_onsets(
     *,
     slope_percentile: float = 30.0,
     slope_threshold: float | None = None,
-) -> dict[str, np.ndarray]:
+) -> dict[str, np.ndarray]:  # type: ignore
     """
     Vectorized pause/onset detection.
       - Pauses: contiguous samples where |dx| <= threshold for >= min_pause_ms
@@ -311,9 +310,17 @@ def find_respiratory_pauses_and_onsets(
     pauses = starts[keep]
     onsets = ends[keep]
 
+    # TODO pauses and onsets returned empty here. fix it. qy 9/29/2025
+    # if empty, return empty pauses, but set onsets to every 0 crossing of resp
+    if pauses.size == 0:
+        # find zero crossings
+        zero_crossings = np.where(np.diff(np.sign(x)))[0]
+        onsets = zero_crossings + 1  # +1 to get the index after crossing
+        pauses = np.array([], dtype=int)
+
     # clamp to signal bounds (defensive; ends are already exclusive)
-    pauses = pauses[(pauses >= 0) & (pauses < n)]
-    onsets = onsets[(onsets >= 0) & (onsets <= n)]
+    # pauses = pauses[(pauses >= 0) & (pauses < n)]
+    # onsets = onsets[(onsets >= 0) & (onsets <= n)]
 
     return {"pauses": pauses.astype(int), "onsets": onsets.astype(int)}
 

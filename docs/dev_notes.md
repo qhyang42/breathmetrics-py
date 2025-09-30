@@ -1,7 +1,7 @@
 # development notes for breathmetrics python
 9/26/2025 scaffolding built. started building helper function. no test performed yet. 
 9/27/2025 add find extrema. need to find a testing data 
-
+9/29/2025 tested core functions. onset detection not working. need to rewrite the whole thing because chatgpt is being dumb 
 
 
 
