@@ -1,4 +1,4 @@
-# all the onset detection methods.
+# all the onset and pause detection methods.
 # legacy, new, event-marker aided.
 from __future__ import annotations
 
@@ -212,3 +212,50 @@ def find_onsets_and_pauses_legacy(
         exhaleonsets[-1] = last_zero_crossings_bound
 
     return inhaleonsets, exhaleonsets, inhalepauseonsets, exhalepauseonsets
+
+
+def find_pause_slope(
+    resp: ArrayLike,
+    fs: float,
+    inhaleonsets: ArrayLike,
+    exhaletroughs: ArrayLike,
+    min_edge_ms: float = 200,
+    flat_frac: float = 0.5,
+) -> tuple[np.ndarray]:
+    """
+    find pause based on two segment slope method.
+    inputs:
+        resp: respiration signal
+        fs: sampling frequency
+        inhaleonsets: indices of inspiratory onsets
+        exhaletroughs: indices of expiratory troughs
+    outputs:
+        exhale_offsets: indices of expiratory offsets (same as pause onsets)
+    """
+    exhale_offsets = np.full_like(exhaletroughs, np.nan, dtype=float)
+    exhale_offsets = exhale_offsets[:-1]  # first breath doesn't need a pause
+
+    x = np.asarray(resp, dtype=float)
+    inhaleonsets = np.asarray(inhaleonsets, dtype=int)
+    exhaletroughs = np.asarray(exhaletroughs, dtype=int)
+    fs = float(fs)
+    for i in range(len(exhaletroughs) - 1):  # first breath doesn't need a pause
+        inhalewindow = x[exhaletroughs[i] : inhaleonsets[i + 1]]
+
+        # slope segment based pause detection here
+        y = inhalewindow[:]
+        n = len(y)
+        t = np.arange(n - 1) / fs  # time in s
+        y0 = y - np.mean(y)
+
+        # ----- 1-step linear: y = a + b t
+        X1 = np.column_stack((np.ones(n), t))
+        b1, *_ = np.linalg.lstsq(X1, y0, rcond=None)
+        yhat1 = X1 @ b1
+        rss1 = np.sum((y0 - yhat1) ** 2)
+        bic1 = n * np.log(rss1 / n) + 2 * np.log(n)
+
+        # ----- 2-step continuous hinge: y = a + b t + c * max(0, t - tau)
+        minEdge = max(1, int(np.floor(min_edge_ms / 1000 * fs)))
+
+    return exhale_offsets  # type: ignore
