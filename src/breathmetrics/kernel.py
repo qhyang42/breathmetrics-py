@@ -335,7 +335,9 @@ def find_respiratory_offsets(
     putativeexhaleoffset = np.where(np.diff(finalwindow) > 0)[0][0]
 
     # check if there's an actual exhale end that it's not artifact
-    avgexhalelength = np.mean(exhale_offsets[:-2] - exh_on[:-2])
+    avgexhalelength = np.mean(
+        exhale_offsets[:-1] - exh_on[:-1]
+    )  # from 1 to end-1 in matlab index.
     lowerlimit = avgexhalelength / 4
     upperlimit = avgexhalelength * 1.75
     if (
