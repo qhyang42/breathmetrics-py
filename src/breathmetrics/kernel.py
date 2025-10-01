@@ -255,7 +255,7 @@ def find_respiratory_extrema(
     return corrected_peaks, corrected_troughs
 
 
-## find resp offsets TODO: needs tests
+## find resp offsets
 def find_respiratory_offsets(
     resp: ArrayLike,
     inhale_onsets: ArrayLike,
@@ -332,6 +332,7 @@ def find_respiratory_offsets(
     ## final exhale original from matlab
     # last exhale is different becuase there is no next inhale onset
     finalwindow = x[exh_on[-1] :]
+    putativeexhaleidx = np.where(np.diff(finalwindow) > 0)[0]
     putativeexhaleoffset = np.where(np.diff(finalwindow) > 0)[0][0]
 
     # check if there's an actual exhale end that it's not artifact
@@ -341,7 +342,7 @@ def find_respiratory_offsets(
     lowerlimit = avgexhalelength / 4
     upperlimit = avgexhalelength * 1.75
     if (
-        len(putativeexhaleoffset) == 0
+        len(putativeexhaleidx) == 0
         or putativeexhaleoffset < lowerlimit
         or putativeexhaleoffset >= upperlimit
     ):
@@ -352,8 +353,8 @@ def find_respiratory_offsets(
     return inhale_offsets, exhale_offsets
 
 
-# find breath durations TODO need tests
-def find_breath_durations(
+# find breath durations
+def find_respiratory_durations(
     inhale_onsets: ArrayLike,
     inhale_offsets: ArrayLike,
     exhale_onsets: ArrayLike,
@@ -422,13 +423,14 @@ def find_breath_durations(
     )
 
 
-## find resp volume -- vscode auto completion. TODO review
+## find resp volume
 def find_respiratory_volume(
     resp: ArrayLike,
     inhale_onsets: ArrayLike,
     inhale_offsets: ArrayLike,
     exhale_onsets: ArrayLike,
     exhale_offsets: ArrayLike,
+    fs: float,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Port of MATLAB findRespiratoryVolume.m (object-free).
@@ -440,22 +442,27 @@ def find_respiratory_volume(
     inh_on = np.asarray(inhale_onsets, dtype=int).ravel()
     inh_off = np.asarray(inhale_offsets, dtype=int).ravel()
     exh_on = np.asarray(exhale_onsets, dtype=int).ravel()
-    exh_off = np.asarray(exhale_offsets, dtype=int).ravel()
+    exh_off = np.asarray(exhale_offsets, dtype=float).ravel()  # can be NaN
 
     inhale_volumes = np.zeros_like(inh_off, dtype=float)
     exhale_volumes = np.zeros_like(exh_off, dtype=float)
 
-    for i in range(inh_off.size):
-        if not np.isnan(inh_on[i]) and not np.isnan(inh_off[i]):
-            inhale_volumes[i] = x[int(inh_off[i])] - x[int(inh_on[i])]
+    for i in range(inh_on.size):
+        if not np.isnan(inh_off[i]):
+            inhale_volumes[i] = np.sum(x[inh_on[i] : inh_off[i]])
         else:
             inhale_volumes[i] = np.nan
 
-    for e in range(exh_off.size):
-        if not np.isnan(exh_on[e]) and not np.isnan(exh_off[e]):
-            exhale_volumes[e] = x[int(exh_off[e])] - x[int(exh_on[e])]
+    for e in range(exh_on.size):
+        if not np.isnan(exh_off[e]):
+            exhale_volumes[e] = np.sum(x[exh_on[e] : int(exh_off[e])])
+            exhale_volumes[e] = abs(exhale_volumes[e])  # make exhale volume positive
         else:
             exhale_volumes[e] = np.nan
+
+    # normallized by sampling rate
+    inhale_volumes = (inhale_volumes / fs) * 1000
+    exhale_volumes = (exhale_volumes / fs) * 1000
 
     return inhale_volumes, exhale_volumes
 
