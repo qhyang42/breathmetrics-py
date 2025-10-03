@@ -214,6 +214,11 @@ def find_onsets_and_pauses_legacy(
     return inhaleonsets, exhaleonsets, inhalepauseonsets, exhalepauseonsets
 
 
+# TODO: insert new inhale onset detection method here.
+
+
+# find pause based on two segment slope method. relies on an accurate inhale onset estimate.
+# TODO: needs test
 def find_pause_slope(
     resp: ArrayLike,
     fs: float,
@@ -248,6 +253,17 @@ def find_pause_slope(
         t = np.arange(n - 1) / fs  # time in s
         y0 = y - np.mean(y)
 
+        # steps:
+        # run 1 step model
+        # search through taus for 2 segment model
+        # update best rss and best b2 as I go
+        # compute bic for best 2 step model
+        # compare bic1 and bic2
+        # if bic 2 is smaller,
+        # and if slope 2 is smaller than slope 1
+        # its a real pause. record tauidx.
+        # this exhale pause onset equals exhale trough + tauidx
+
         # ----- 1-step linear: y = a + b t
         X1 = np.column_stack((np.ones(n), t))
         b1, *_ = np.linalg.lstsq(X1, y0, rcond=None)
@@ -256,6 +272,43 @@ def find_pause_slope(
         bic1 = n * np.log(rss1 / n) + 2 * np.log(n)
 
         # ----- 2-step continuous hinge: y = a + b t + c * max(0, t - tau)
+        # skip two steps if not enough samples at the edge
         minEdge = max(1, int(np.floor(min_edge_ms / 1000 * fs)))
+        if n - 2 * minEdge < 1:
+            bic2 = np.nan
+            # exhale offset of this breath is nan
+            exhale_offsets[i] = np.nan
+            # continue to next loop
+            continue
+
+        best_rss = np.inf
+        best_beta = None
+        for tauidx in range(minEdge, n - minEdge):
+            tau = t[tauidx]
+            hinge = np.max(0, t - tau)
+            X2 = np.column_stack((np.ones(n), t, hinge))
+            b2, *_ = np.linalg.lstsq(X2, y0, rcond=None)
+            yhat2 = X2 @ b2
+            rss2 = np.sum((y0 - yhat2) ** 2)
+
+            if rss2 < best_rss:
+                best_rss = rss2
+                best_beta = b2
+                best_tauIdx = tauidx
+
+        bic2 = n * np.log(best_rss / n) + 4 * np.log(n)
+
+        # ---- decision rule --- #
+        if bic2 < bic1 and best_beta is not None:
+            a, b, c = best_beta
+            slopeEarly = b
+            slopeLate = b + c
+            if (c < 0) and (abs(slopeEarly) * flat_frac >= slopeLate):
+                # choose 2 steps
+                exhale_offsets[i] = exhaletroughs[i] + best_tauIdx
+            else:
+                exhale_offsets[i] = np.nan
+        else:
+            exhale_offsets[i] = np.nan
 
     return exhale_offsets  # type: ignore

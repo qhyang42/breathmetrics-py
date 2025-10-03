@@ -4,6 +4,7 @@
 9/29/2025 tested core functions. onset detection not working. need to rewrite the whole thing because chatgpt is being dumb 
 9/30/2025 legacy onset detection added and tested 
 10/1/2025 add primary core function added and working. behavior is slightly different from original breathmetrics? 
+10/3/2025 added my pause detection method 
 
 
 # pipeline from orig breathmetrics toolbox: 
