@@ -283,6 +283,7 @@ def find_pause_slope(
 
         best_rss = np.inf
         best_beta = None
+        best_tauIdx = 0
         for tauidx in range(minEdge, n - minEdge):
             tau = t[tauidx]
             hinge = np.max(0, t - tau)
