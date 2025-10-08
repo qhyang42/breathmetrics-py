@@ -3,6 +3,10 @@ import numpy as np
 from numpy.typing import ArrayLike
 from dataclasses import dataclass
 
+# import breathmetrics.kernel
+# import breathmetrics.kernel_onset_detection_methods
+import breathmetrics.utils
+
 
 ## TODO this needs to be built block by block. no clusterfuck dumping. keep things clean.
 
@@ -71,39 +75,83 @@ from dataclasses import dataclass
 
 
 @dataclass
-class breathmetrics:
+class BreathMetrics:
+    """
+    Breathmetrics class.
+
+    """
+
     # signal properties:
-    datatype: None
+    datatype: str
     fs: float  # sampling rate (Hz)
     time: float
 
     # breathing signal
-    rawRespiration: ArrayLike
-    smoothedRespiration: np.ndarray
-    baselineCorrectedRespiration: np.ndarray
+    raw_respiration: np.ndarray
+    smoothed_respitation: np.ndarray
+    bsl_corrected_respiration: np.ndarray
 
     # calculated features
-    inhalePeaks: np.ndarray
-    exhaleTroughs: np.ndarray
+    inhale_peaks: np.ndarray
+    exhale_troughs: np.ndarray
 
-    peakInspiratoryFlows: np.ndarray
-    troughExpiratoryFlows: np.ndarray
+    peak_inspiratory_flows: np.ndarray
+    trough_expiratory_flows: np.ndarray
 
-    inhaleOnsets: np.ndarray
-    exhaleOnsets: np.ndarray
+    inhale_onsets: np.ndarray
+    exhale_onsets: np.ndarray
 
-    inhaleOffsets: np.ndarray
-    exhaleOffsets: np.ndarray
+    inhale_offsets: np.ndarray
+    exhale_offsets: np.ndarray
 
-    #
+    inhale_time2peak: np.ndarray
+    exhale_time2trough: np.ndarray
 
-    # class BreathMetrics:
-    """Core breathing-signal parameterization (skeleton)."""
+    inhale_volumes: np.ndarray
+    exhale_volumes: np.ndarray
 
-    # def __init__(self, signal: np.ndarray, config: BreathMetricsConfig):
-    #     self.signal = np.asarray(signal, dtype=float)
-    #     self.config = config
-    #     self.features = {}
+    inhale_durations: np.ndarray
+    exhale_durations: np.ndarray
+
+    inhale_pause_onsets: np.ndarray
+    exhale_pause_onsets: np.ndarray
+
+    inhale_pause_durations: np.ndarray
+    exhale_pause_durations: np.ndarray
+
+    # secondaryFeatures: TODO figure out what type this is
+
+    respiratory_phase: np.ndarray
+
+    ##  ERP parameters
+    # ERPMatrix
+    # ERPxAxis
+
+    # resampledERPMatrix
+    # resampledERPxAxis
+
+    # ERPtrialEvents
+    # ERPrejectedEvents
+
+    # ERPtrialEventInds
+    # ERPrejectedEventInds
+
+    # statuses
+    # notes
+
+    feature_estimations_complete: bool
+    features_manually_edited: bool
+
+    ## method definition starts here
+
+    def __init__(self, signal: ArrayLike, srate: float, datatype: str):
+        signal = np.asarray(signal, dtype=float)
+        self.raw_respiration, self.srate, self.datatype = (
+            breathmetrics.utils.check_input(signal, srate, datatype)
+        )
+
+        self.feature_estimations_complete = False
+        self.features_manually_edited = False
 
     # def preprocess(self) -> "BreathMetrics":
     #     x = self.signal

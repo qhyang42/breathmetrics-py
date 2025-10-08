@@ -1,9 +1,29 @@
 import numpy as np
+from numpy.typing import ArrayLike
 
 ## utilities for breathmetrics
 
 
-# utils.py
+# check inputs
+def check_input(
+    resp: ArrayLike, srate: float, datatype: str
+) -> tuple[np.ndarray, float, str]:
+    """
+    check input for breathmetrics and return error message
+    """
+    resp = np.asarray(resp, dtype=float)
+    if resp.ndim != 1:
+        resp = resp.ravel()
+    if resp.size < 10:
+        raise ValueError("Respiration signal must be a 1D vector of length > 10.")
+    if not (20 <= srate <= 5000):
+        raise ValueError("Sampling rate must be between 20 Hz and 5000 Hz.")
+    supported = {"humanAirflow", "humanBB", "rodentAirflow", "rodentThermocouple"}
+    if datatype not in supported:
+        raise ValueError(f"Unsupported data_type: {datatype}")
+    return resp, srate, datatype
+
+
 def detrend_linear(x: np.ndarray) -> np.ndarray:
     t = np.arange(x.size)
     A = np.vstack([t, np.ones_like(t)]).T
