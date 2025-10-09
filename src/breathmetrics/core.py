@@ -153,6 +153,24 @@ class BreathMetrics:
         self.feature_estimations_complete = False
         self.features_manually_edited = False
 
+        # get smooth window
+        if self.datatype == "humanAirflow":
+            smoothwin = 50
+        elif self.datatype == "humanBB":
+            smoothwin = 50
+            print(
+                "Notice: Only certain features can be derived from breathing belt data"
+            )
+        elif self.datatype == "rodentThermocouple":
+            smoothwin = 10
+            print(
+                "Notice: Only certain features can be derived from rodent thermocouple data"
+            )
+
+            a = np.floor((self.srate / 1000) * smoothwin)
+
+        # smoothing data
+
     # def preprocess(self) -> "BreathMetrics":
     #     x = self.signal
     #     if self.config.detrend:
