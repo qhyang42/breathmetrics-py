@@ -5,6 +5,8 @@ from dataclasses import dataclass
 
 # import breathmetrics.kernel
 # import breathmetrics.kernel_onset_detection_methods
+import breathmetrics.kernel
+import breathmetrics.kernel_onset_detection_methods
 import breathmetrics.utils
 
 
@@ -84,7 +86,7 @@ class BreathMetrics:
     # signal properties:
     datatype: str
     fs: float  # sampling rate (Hz)
-    time: float
+    time: np.ndarray
 
     # breathing signal
     raw_respiration: np.ndarray
@@ -167,9 +169,72 @@ class BreathMetrics:
                 "Notice: Only certain features can be derived from rodent thermocouple data"
             )
 
-            a = np.floor((self.srate / 1000) * smoothwin)
+            corrected_smooth_window = np.floor((self.srate / 1000) * smoothwin)
+            self.smoothed_respitation = breathmetrics.utils.fft_smooth(
+                self.raw_respiration, corrected_smooth_window
+            )
+            self.time = np.arange(1, len(signal) / self.srate, 1 / self.srate)
 
-        # smoothing data
+        # correct resp to baseline
+
+    def correct_resp_to_baseline(self):
+        self.bsl_corrected_respiration = (
+            breathmetrics.kernel.correct_respiration_to_baseline(
+                self.smoothed_respitation, self.fs
+            )
+        )
+
+    ## feature extraction
+    def find_extrema(self):
+        self.inhale_peaks, self.exhale_troughs = (
+            breathmetrics.kernel.find_respiratory_extrema(
+                self.bsl_corrected_respiration, self.srate
+            )
+        )
+
+    def find_onsets_and_pauses(self):
+        (
+            self.inhale_onsets,
+            self.exhale_onsets,
+            self.inhale_offsets,
+            self.exhale_offsets,
+        ) = breathmetrics.kernel_onset_detection_methods.find_onsets_and_pauses_legacy(
+            self.bsl_corrected_respiration, self.inhale_peaks, self.exhale_troughs
+        )
+
+    def find_resp_durations(self):
+        (
+            self.inhale_durations,
+            self.exhale_durations,
+            self.inhale_pause_durations,
+            self.exhale_pause_durations,
+        ) = breathmetrics.kernel.find_respiratory_durations(
+            self.inhale_onsets,
+            self.inhale_offsets,
+            self.exhale_onsets,
+            self.exhale_offsets,
+            self.inhale_pause_onsets,
+            self.exhale_pause_onsets,
+            self.srate,
+        )
+
+    def find_resp_volume(self):
+        self.inhale_volumes, self.exhale_volumes = (
+            breathmetrics.kernel.find_respiratory_volume(
+                self.bsl_corrected_respiration,
+                self.inhale_onsets,
+                self.inhale_offsets,
+                self.exhale_onsets,
+                self.exhale_offsets,
+                self.srate,
+            )
+        )
+
+        ## secondary features
+
+        ## ERPS
+
+        ## esitmate all features
 
     # def preprocess(self) -> "BreathMetrics":
     #     x = self.signal
