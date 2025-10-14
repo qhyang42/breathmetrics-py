@@ -77,7 +77,7 @@ import breathmetrics.utils
 
 
 @dataclass
-class BreathMetrics:
+class bm:
     """
     Breathmetrics class.
 
@@ -138,7 +138,7 @@ class BreathMetrics:
     # ERPtrialEventInds
     # ERPrejectedEventInds
 
-    # statuses
+    statuses: None
     # notes
 
     feature_estimations_complete: bool
@@ -230,11 +230,68 @@ class BreathMetrics:
             )
         )
 
-        ## secondary features
+    ## secondary features TODO: the whole thing needs test
 
-        ## ERPS
+    def get_secondary_respiratory_features(
+        self, verbose: bool = False
+    ) -> dict[str, float]:
+        """
+        Compute secondary (summary-level) respiratory statistics from a BreathMetrics object.
 
-        ## esitmate all features
+        Parameters
+        ----------
+        bm : BreathMetrics
+            Object containing basic breathing features (onsets, volumes, durations, etc.)
+        verbose : bool, optional
+            Whether to print summary output.
+
+        Returns
+        -------
+        dict[str, float]
+            Dictionary of derived secondary features.
+        """
+
+        from breathmetrics.kernel_secondary import (
+            get_valid_breath_indices,
+            compute_breath_timing_metrics,
+            compute_airflow_metrics,
+            compute_duty_cycle_metrics,
+            assemble_respiratory_summary,
+        )
+
+        # 1. Identify valid breaths
+        valid_inhales, valid_exhales = get_valid_breath_indices(
+            self.statuses, len(self.inhale_onsets), len(self.exhale_onsets)
+        )
+
+        # 2. Compute breathing rate, IBI, variability
+        timing = compute_breath_timing_metrics(
+            self.inhale_onsets, valid_inhales, self.srate
+        )
+
+        # 3. Optional airflow features
+        airflow = {}
+        duty = {}
+        if self.datatype in {"humanAirflow", "rodentAirflow"}:
+            airflow = compute_airflow_metrics(self, valid_inhales, valid_exhales)
+            duty = compute_duty_cycle_metrics(
+                self, valid_inhales, valid_exhales, timing["inter_breath_interval"]
+            )
+
+        # 4. Assemble everything into a summary dict
+        summary = assemble_respiratory_summary(self.datatype, timing, airflow, duty)
+
+        # 5. Optional printing
+        if verbose:
+            print("\nSecondary Respiratory Features:")
+            for k, v in summary.items():
+                print(f"{k:40s}: {v:.5g}")
+
+        return summary
+
+    ## ERPS
+
+    ## esitmate all features
 
     # def preprocess(self) -> "BreathMetrics":
     #     x = self.signal

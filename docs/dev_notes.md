@@ -5,7 +5,7 @@
 9/30/2025 legacy onset detection added and tested 
 10/1/2025 add primary core function added and working. behavior is slightly different from original breathmetrics? 
 10/3/2025 added my pause detection method 
-
+10/14/2025 add core logic and secondary methods. 
 
 # pipeline from orig breathmetrics toolbox: 
 ## preproc
