@@ -5,4 +5,10 @@
 # from numpy.typing import ArrayLike
 
 
-# def compute_secondary_features
+# secondary feature calculation.
+# breathing rate
+# inter-breath interval
+# coef of variation of breathing rate
+
+# airflow specific secondary features
+# mean inhale/exhale rate/volumes, tidal volumes, minute ventilations, duty cycle
