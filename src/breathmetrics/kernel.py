@@ -469,3 +469,110 @@ def find_respiratory_volume(
 
 ## calculate secondary features
 ## create resp ERPs
+def create_respiratory_erp_matrix(
+    resp: np.ndarray,
+    event_array: np.ndarray,
+    pre_samples: int,
+    post_samples: int,
+    append_nans: bool = False,
+    verbose: bool = True,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Creates an ERP-like matrix (events x time) aligned to respiratory events.
+
+    Parameters
+    ----------
+    resp : np.ndarray
+        Respiratory recording (1D vector)
+    event_array : np.ndarray
+        Indices of events to be used as onsets for the ERP
+    pre_samples : int
+        Number of samples before each event to include (must be positive)
+    post_samples : int
+        Number of samples after each event to include
+    append_nans : bool, default=False
+        If True, out-of-bounds segments are padded with NaN instead of rejected
+    verbose : bool, default=True
+        If True, prints details for rejected events
+
+    Returns
+    -------
+    ERPMatrix : np.ndarray
+        Matrix of shape (n_valid_events, pre+post+1)
+    trial_events : np.ndarray
+        Event indices successfully used for ERP
+    rejected_events : np.ndarray
+        Event indices that could not be used
+    trial_event_inds : np.ndarray
+        Positions (indices) of accepted events in event_array
+    rejected_event_inds : np.ndarray
+        Positions (indices) of rejected events in event_array
+    """
+
+    resp = np.asarray(resp).ravel()
+    event_array = np.asarray(event_array).ravel()
+    n_samples = resp.size
+
+    trial_events = []
+    rejected_events = []
+    trial_event_inds = []
+    rejected_event_inds = []
+    erp_rows = []
+
+    for this_idx, this_event in enumerate(event_array):
+        # Skip NaN events
+        if np.isnan(this_event):
+            rejected_events.append(np.nan)
+            rejected_event_inds.append(this_idx)
+            if verbose:
+                print(f"Event #{this_idx+1} (NaN) is outside of ERP range")
+            continue
+
+        this_event = int(this_event)
+        event_window = np.arange(
+            this_event - pre_samples, this_event + post_samples + 1
+        )
+
+        if not append_nans:
+            # Reject events whose window extends outside signal bounds
+            if (event_window < 0).any() or (event_window >= n_samples).any():
+                rejected_events.append(this_event)
+                rejected_event_inds.append(this_idx)
+                if verbose:
+                    print(f"Event #{this_idx+1} ({this_event}) is outside of ERP range")
+                continue
+
+            trial_events.append(this_event)
+            trial_event_inds.append(this_idx)
+            erp_rows.append(resp[event_window])
+
+        else:
+            # lenient mode: pad missing portions with NaN
+            this_erp = np.full(pre_samples + post_samples + 1, np.nan)
+            valid_mask = (event_window >= 0) & (event_window < n_samples)
+            if np.any(valid_mask):
+                this_erp[valid_mask] = resp[event_window[valid_mask]]
+            if np.all(np.isnan(this_erp)):
+                rejected_events.append(this_event)
+                rejected_event_inds.append(this_idx)
+                if verbose:
+                    print(f"Event #{this_idx+1} ({this_event}) is outside of ERP range")
+            else:
+                trial_events.append(this_event)
+                trial_event_inds.append(this_idx)
+                erp_rows.append(this_erp)
+
+    if len(erp_rows) == 0:
+        if verbose:
+            print("No valid events were found. Returning empty array")
+        ERPMatrix = np.empty((0, pre_samples + post_samples + 1))
+    else:
+        ERPMatrix = np.vstack(erp_rows)
+
+    return (
+        ERPMatrix,
+        np.array(trial_events, dtype=float),
+        np.array(rejected_events, dtype=float),
+        np.array(trial_event_inds, dtype=int),
+        np.array(rejected_event_inds, dtype=int),
+    )
