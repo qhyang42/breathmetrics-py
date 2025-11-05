@@ -3,6 +3,8 @@ from __future__ import annotations
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+from matplotlib.colors import ListedColormap
+from matplotlib.lines import Line2D  # ✅ import this explicitly
 
 
 def plot_resp_features(bm, annotate: None, sizedata: float = 36):
@@ -112,8 +114,16 @@ def plot_breathing_compositions(bm, plottype: str):
     plottype: 'raw', 'normalized', 'line', 'hist'
     """
     matrix_size = 1000
-    breath_phase_labels = ["inhale", "exhale", "inhale_pause", "exhale_pause"]
-    _custom_colors = sns.color_palette("Set2", len(breath_phase_labels))  # keep
+    breath_phase_labels = ["inhale", "exhale", "inhale_pause", "exhale_pause"]  # keep
+    custom_colors = np.array(  # keep
+        [
+            [0.0000, 0.4470, 0.7410],  # blue
+            [0.8500, 0.3250, 0.0980],  # orange
+            [0.9290, 0.6940, 0.1250],  # yellow
+            [0.4940, 0.1840, 0.5560],  # purple
+            [1.0000, 1.0000, 1.0000],  # white (used in 'raw' background)
+        ]
+    )
     onsets = getattr(bm, "inhale_onsets", None)
     if onsets is None:
         raise ValueError("Estimated features before plotting breath compositions.")
@@ -124,11 +134,10 @@ def plot_breathing_compositions(bm, plottype: str):
 
     match plottype:
         case "normalized":
-            _breath_matrix = np.zeros((n_breaths, matrix_size))  # keep
-
+            breath_matrix = np.zeros((n_breaths, matrix_size))
             for b in range(n_breaths):
-                _ind = 1  # keep
-                _this_breath_comp = np.zeros(matrix_size)  # keep
+                ind = 1
+                this_breath_comp = np.zeros(matrix_size)
                 this_inhale_dur = bm.inhale_durations[b]
                 this_inhale_pause_dur = bm.exhale_pause_durations[b]
 
@@ -172,4 +181,59 @@ def plot_breathing_compositions(bm, plottype: str):
                     normed_exhale_dur += 1
                 elif sum_check > matrix_size:
                     normed_exhale_dur -= 1
-                ## TODO keep going. this is line 76 in plotBreathCompositions.m
+
+                this_breath_comp[1 : ind + normed_inhale_dur] = 1  # inhale
+                ind = normed_inhale_dur
+                if normed_inhale_pause_dur > 0:
+                    this_breath_comp[ind + 1 : ind + normed_inhale_pause_dur] = (
+                        2  # inhale pause
+                    )
+                    ind += normed_inhale_pause_dur
+                this_breath_comp[ind + 1 : ind + normed_exhale_dur] = 3  # exhale
+                ind += normed_exhale_dur
+                if normed_exhale_pause_dur > 0:
+                    this_breath_comp[ind + 1 : ind + normed_exhale_pause_dur] = (
+                        4  # exhale pause
+                    )
+                breath_matrix[b, :] = this_breath_comp
+
+            fig, ax = plt.subplots(figsize=(10, 5))
+
+            # --- image ---
+            cmap = ListedColormap(
+                custom_colors[:4, :]
+            )  # same as MATLAB colormap(customColors(1:4,:))
+            _im = ax.imshow(
+                breath_matrix,
+                aspect="auto",
+                interpolation="nearest",
+                cmap=cmap,
+                origin="upper",
+            )
+
+            # x-axis limits
+            ax.set_xlim(0.5, matrix_size + 0.5)
+
+            # --- normalize x ticks to percentages ---
+            x_ticks = np.linspace(1, matrix_size, 11)
+            x_tick_labels = [f"{int(round(x / matrix_size * 100))}%" for x in x_ticks]
+            ax.set_xticks(x_ticks)
+            ax.set_xticklabels(x_tick_labels)
+
+            # y limits
+            ax.set_ylim(0.5, n_breaths + 0.5)
+
+            # labels
+            ax.set_xlabel("Proportion of Breathing Period")
+            ax.set_ylabel("Breath Number")
+
+            # --- custom legend with dummy line handles ---
+            handles = [
+                Line2D([], [], color=custom_colors[i], linewidth=2) for i in range(4)
+            ]
+            ax.legend(handles, breath_phase_labels)
+
+            plt.tight_layout()
+            plt.show()
+
+            ## TODO: test this with real data but at least there is no syntax error now
