@@ -5,12 +5,12 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 from matplotlib.lines import Line2D
 
+# %% normalized
 # ----------------------------
 # Dummy example data
 # ----------------------------
 MATRIX_SIZE = 1000
 nBreaths = 12
-
 # create fake "phase-coded" breath matrix (values 0–3)
 rng = np.random.default_rng(42)
 breathMatrix = rng.integers(0, 4, size=(nBreaths, MATRIX_SIZE))
@@ -57,5 +57,3 @@ ax.legend(handles, breath_phase_labels, loc="upper right", frameon=False)
 ax.set_title("Breath Composition (Normalized) — Dummy Example")
 plt.tight_layout()
 plt.show()
-
-# %%

@@ -237,3 +237,104 @@ def plot_breathing_compositions(bm, plottype: str):
             plt.show()
 
             ## TODO: test this with real data but at least there is no syntax error now
+        case "raw":
+            MATRIX_SIZE = 1000
+            nBreaths = len(bm.inhaleOnsets)
+
+            # Compute maximum breath duration in seconds
+            if len(bm.inhaleOnsets) >= 2:
+                maxBreathSize = np.ceil(np.max(np.diff(bm.inhaleOnsets)) / bm.srate)
+            else:
+                maxBreathSize = 1  # fallback for single-breath datasets
+
+            # Initialize breath matrix (each row = one breath)
+            breathMatrix = np.zeros((nBreaths, MATRIX_SIZE), dtype=np.uint8)
+
+            # Convert durations to arrays and handle NaNs
+            inh_dur = np.nan_to_num(np.asarray(bm.inhaleDurations), nan=0.0)
+            inhp_dur = np.nan_to_num(np.asarray(bm.inhalePauseDurations), nan=0.0)
+            exh_dur = np.nan_to_num(np.asarray(bm.exhaleDurations), nan=0.0)
+            exhp_dur = np.nan_to_num(np.asarray(bm.exhalePauseDurations), nan=0.0)
+
+            # -----------------------------------------
+            # Build composition matrix
+            # -----------------------------------------
+            for b in range(nBreaths):
+                row = np.ones(MATRIX_SIZE, dtype=np.uint8) * 4  # base = 4 (background)
+                idx = 0
+
+                # Inhale
+                thisInhaleDur = int(round((inh_dur[b] / maxBreathSize) * MATRIX_SIZE))
+                row[:thisInhaleDur] = 0
+                idx = thisInhaleDur
+
+                # Inhale pause
+                thisInhalePauseDur = int(
+                    round((inhp_dur[b] / maxBreathSize) * MATRIX_SIZE)
+                )
+                row[idx : idx + thisInhalePauseDur] = 1
+                idx += thisInhalePauseDur
+
+                # Exhale
+                thisExhaleDur = int(round((exh_dur[b] / maxBreathSize) * MATRIX_SIZE))
+                row[idx : idx + thisExhaleDur] = 2
+                idx += thisExhaleDur
+
+                # Exhale pause
+                thisExhalePauseDur = int(
+                    round((exhp_dur[b] / maxBreathSize) * MATRIX_SIZE)
+                )
+                row[idx : idx + thisExhalePauseDur] = 3
+
+                # Clip to matrix size (MATLAB: if length > MATRIX_SIZE)
+                row = row[:MATRIX_SIZE]
+                breathMatrix[b, :] = row
+
+            # -----------------------------------------
+            # Plot the image
+            # -----------------------------------------
+            fig, ax = plt.subplots(figsize=(10, 5))
+            cmap = ListedColormap(custom_colors)
+
+            # uint8 conversion mirrors MATLAB’s "image(uint8(...))"
+            _im = ax.imshow(
+                breathMatrix.astype(np.uint8),
+                aspect="auto",
+                interpolation="nearest",
+                cmap=cmap,
+                origin="upper",
+            )
+
+            # Set axis limits
+            ax.set_xlim(0.5, MATRIX_SIZE + 0.5)
+            ax.set_ylim(0.5, nBreaths + 0.5)
+
+            # X ticks (0:0.5:maxBreathSize)
+            TICK_STEP = 0.5
+            x_tick_labels = np.arange(0, maxBreathSize + TICK_STEP, TICK_STEP)
+            x_ticks = np.round(np.linspace(1, MATRIX_SIZE, len(x_tick_labels))).astype(
+                int
+            )
+            ax.set_xticks(x_ticks)
+            ax.set_xticklabels(
+                [f"{x:.1f}".rstrip("0").rstrip(".") for x in x_tick_labels]
+            )
+
+            # Labels
+            ax.set_xlabel("Time (seconds)")
+            ax.set_ylabel("Breath Number")
+            ax.set_title("Breath Composition (Raw)")
+
+            # Custom legend (dummy lines)
+            handles = [
+                Line2D([], [], color=custom_colors[i], linewidth=2) for i in range(4)
+            ]
+            ax.legend(handles, breath_phase_labels, loc="upper right", frameon=False)
+
+            plt.tight_layout()
+            plt.show()
+            ## TODO: not tested yet
+        case "line":
+            print("Line plot not yet implemented.")
+        case "hist":
+            print("Histogram plot not yet implemented.")
