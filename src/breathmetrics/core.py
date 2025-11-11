@@ -290,5 +290,8 @@ class bm:
         return summary
 
     ## ERPS
+    def compute_erp(self):
+        # check how the matlab toolbox handle this.
+        return None
 
     ## esitmate all features

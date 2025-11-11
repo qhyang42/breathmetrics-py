@@ -335,6 +335,187 @@ def plot_breathing_compositions(bm, plottype: str):
             plt.show()
             ## TODO: not tested yet
         case "line":
-            print("Line plot not yet implemented.")
+            nBreaths = len(bm.inhaleDurations)
+
+            fig, ax = plt.subplots(figsize=(8, 5))
+
+            # parula equivalent in Matplotlib: use 'viridis'
+            my_colors = sns.color_palette("viridis", n_colors=nBreaths)
+
+            # ------------------------------------------------
+            # Plot each breath’s phase durations
+            # ------------------------------------------------
+            for b in range(nBreaths):
+                # Always an inhale
+                plot_set = [[1, bm.inhaleDurations[b]]]
+
+                # Optional inhale pause
+                if not np.isnan(bm.inhalePauseDurations[b]):
+                    plot_set.append([2, bm.inhalePauseDurations[b]])
+
+                    # Always an exhale
+                    plot_set.append([3, bm.exhaleDurations[b]])
+
+                # Optional exhale pause
+                if not np.isnan(bm.exhalePauseDurations[b]):
+                    plot_set.append([4, bm.exhalePauseDurations[b]])
+
+                plot_set = np.asarray(plot_set, dtype=float)
+
+            ax.plot(
+                plot_set[:, 0],  # type: ignore
+                plot_set[:, 1],  # type: ignore
+                color=my_colors[b],  # type: ignore
+                linewidth=1.5,
+            )
+            ax.scatter(
+                plot_set[:, 0],  # type: ignore
+                plot_set[:, 1],  # type: ignore
+                marker="s",
+                facecolor=my_colors[b],  # type: ignore
+                edgecolor="none",
+                s=40,
+            )
+
+            # ------------------------------------------------
+            # Compute means and standard deviations
+            # ------------------------------------------------
+            inh = np.asarray(bm.inhaleDurations, dtype=float)
+            inhp = np.asarray(bm.inhalePauseDurations, dtype=float)
+            exh = np.asarray(bm.exhaleDurations, dtype=float)
+            exhp = np.asarray(bm.exhalePauseDurations, dtype=float)
+
+            all_means = np.array(
+                [
+                    np.nanmean(inh),
+                    np.nanmean(inhp),
+                    np.nanmean(exh),
+                    np.nanmean(exhp),
+                ]
+            )
+            all_stds = np.array(
+                [
+                    np.nanstd(inh),
+                    np.nanstd(inhp),
+                    np.nanstd(exh),
+                    np.nanstd(exhp),
+                ]
+            )
+
+            # Add error bars (black vertical bars)
+            ax.errorbar(
+                [1, 2, 3, 4],
+                all_means,
+                yerr=all_stds,
+                color="k",
+                linestyle="none",
+                linewidth=2,
+            )
+
+            # ------------------------------------------------
+            # Axis setup
+            # ------------------------------------------------
+            ax.set_xlim(0, 5)
+            ax.set_xticks([1, 2, 3, 4])
+            ax.set_xticklabels(
+                [
+                    "Inhale Durations",
+                    "Inhale Pause Durations",
+                    "Exhale Durations",
+                    "Exhale Pause Durations",
+                ]
+            )
+            ax.set_ylabel("Time (seconds)")
+
+            all_maxes = np.array(
+                [
+                    np.nanmax(inh),
+                    np.nanmax(inhp),
+                    np.nanmax(exh),
+                    np.nanmax(exhp),
+                ]
+            )
+            ymax = np.nanmax(all_maxes)
+            ax.set_ylim(0, ymax + 0.5)
+
+            # ------------------------------------------------
+            # Text annotations (mean & std)
+            # ------------------------------------------------
+            topline_bump = 0.2
+            bottomline_bump = 0.1
+            fsize = 10
+
+            for xi in range(1, 5):
+                mean = all_means[xi - 1]
+                std = all_stds[xi - 1]
+                mmax = all_maxes[xi - 1]
+
+                if np.isfinite(mmax):
+                    ax.text(
+                        xi,
+                        mmax + topline_bump,
+                        f"Mean = {mean:.3g} s",
+                        ha="center",
+                        fontsize=fsize,
+                    )
+                    ax.text(
+                        xi,
+                        mmax + bottomline_bump,
+                        f"Std = {std:.3g} s",
+                        ha="center",
+                        fontsize=fsize,
+                    )
+
+            ax.set_title("Breath Phase Durations (Per-Breath Lines)")
+            plt.tight_layout()
+            plt.show()
         case "hist":
-            print("Histogram plot not yet implemented.")
+            inhale = np.asarray(bm.inhaleDurations, dtype=float)
+            inhale_pause = np.asarray(bm.inhalePauseDurations, dtype=float)
+            exhale = np.asarray(bm.exhaleDurations, dtype=float)
+            exhale_pause = np.asarray(bm.exhalePauseDurations, dtype=float)
+
+            # Replace NaNs for histogram counting
+            inhale = inhale[np.isfinite(inhale)]
+            inhale_pause = inhale_pause[np.isfinite(inhale_pause)]
+            exhale = exhale[np.isfinite(exhale)]
+            exhale_pause = exhale_pause[np.isfinite(exhale_pause)]
+
+            # Determine number of bins (same logic as MATLAB)
+            nBins = int(np.floor(len(inhale) / 5))
+            if nBins < 5:
+                nBins = 10
+
+            # Get 4 distinct colors (parula-like) using seaborn
+            my_colors = sns.color_palette("crest", n_colors=4)
+
+            # --------------------------------------------------
+            # Build the figure
+            # --------------------------------------------------
+            fig, axes = plt.subplots(2, 2, figsize=(8, 6))
+            axes = axes.flatten()
+
+            datasets = [
+                (inhale, "Inhale Durations (seconds)"),
+                (inhale_pause, "Inhale Pause Durations (seconds)"),
+                (exhale, "Exhale Durations (seconds)"),
+                (exhale_pause, "Exhale Pause Durations (seconds)"),
+            ]
+
+            for i, (data, xlabel) in enumerate(datasets):
+                ax = axes[i]
+                counts, bins = np.histogram(data, bins=nBins)
+                centers = 0.5 * (bins[:-1] + bins[1:])
+                ax.bar(
+                    centers,
+                    counts,
+                    width=(bins[1] - bins[0]),
+                    color=my_colors[i],
+                    edgecolor="none",
+                )
+                ax.set_xlabel(xlabel)
+                ax.set_ylabel("Count")
+                ax.set_title(xlabel.replace(" (seconds)", ""))
+
+            plt.tight_layout()
+            plt.show()
