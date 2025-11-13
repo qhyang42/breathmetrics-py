@@ -8,6 +8,7 @@
 10/14/2025 add core logic and secondary methods. 
 11/3/2025 start adding plotting method. skipped ERP.
 11/4/2025 feature plotting. need to add the part that plots annotations. (annotation from the GUI?). 
+11/13/2025 ready for GUI and CLI. parts skipped: annotation in feature plotting, ERP plotting, ERP estimate in core, estimate all features in core. 
 
 # pipeline from orig breathmetrics toolbox: 
 ## preproc
