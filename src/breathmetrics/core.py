@@ -294,4 +294,4 @@ class bm:
         # check how the matlab toolbox handle this.
         return None
 
-    ## esitmate all features
+    ## esitmate all features. call all methods in order.

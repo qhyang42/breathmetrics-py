@@ -191,3 +191,91 @@ def assemble_respiratory_summary(datatype, timing, airflow, duty):
             }
         )
     return base
+
+
+### additional secondary features from Sagar et al. 2025 Nat. Hum. Behav.
+### these are calculated for breathing phases, not the whole signal.
+def calculate_smoothness(signal, fs) -> float:
+    """
+    Compute smoothness as the negative mean absolute difference between the signal and its moving average (window size = fs/10 seconds, rounded to nearest sample).
+    """
+    signal = np.asarray(signal, dtype=float)
+    window = max(1, int(round(fs / 10)))
+    kernel = np.ones(window) / window
+    smooth_sig = np.convolve(signal, kernel, mode="same")
+    smoothness = -np.mean(np.abs(smooth_sig - signal))
+    return smoothness  # type: ignore
+
+
+def calculate_curvature(signal) -> float:
+    """Compute curvature as the mean absolute second derivative of the respiration signal."""
+    signal = np.asarray(signal, dtype=float)
+    first_derivative = np.gradient(signal)
+    second_derivative = np.gradient(first_derivative)
+    curvature = np.mean(np.abs(second_derivative))
+    return curvature  # type: ignore
+
+
+def calculate_phase2slope(signal) -> float:
+    """compute the slope of the breathing segment"""
+    signal = np.asarray(signal, dtype=float)
+    x = len(signal)
+    p = np.polyfit(np.arange(x), signal, 1)
+    slope = p[0]
+    return slope  # type: ignore
+
+
+def calculate_smoothness_around_point(signal, fs, point_idx) -> float:
+    """Compute smoothness around a specific point in the respiration signal."""
+    signal = np.asarray(signal, dtype=float)
+    window_size = 0.05 * len(signal)  # 5% of total duration
+    half_window_samples = int(round(window_size / 2))
+    start_idx = max(0, point_idx - half_window_samples)
+    end_idx = min(len(signal), point_idx + half_window_samples)
+    segment = signal[start_idx:end_idx]
+
+    window = max(1, int(round(fs / 10)))
+    kernel = np.ones(window) / window
+    smooth_seg = np.convolve(segment, kernel, mode="same")
+    smoothness = -np.mean(np.abs(smooth_seg - segment))
+    return smoothness  # type: ignore
+
+
+def compute_time_symmetry(signal) -> float:
+    """Compute time symmetry of the respiration signal."""
+    signal = np.asarray(signal, dtype=float)
+    # time flip the signal
+    flipped_signal = signal[::-1]
+    # remove the middle point if the length is odd
+    if len(signal) % 2 != 0:
+        mid_idx = len(signal) // 2
+        signal = np.delete(signal, mid_idx)
+        flipped_signal = np.delete(flipped_signal, mid_idx)
+    # pearson's correlation between the two
+    if np.std(signal) > 0 and np.std(flipped_signal) > 0:
+        corr = np.corrcoef(signal, flipped_signal)[0, 1]
+
+    return corr  # type: ignore
+
+
+def compute_time_symmetry_around_point(signal, point_idx) -> float:
+    """Compute time symmetry around a point of the respiration signal."""
+    signal = np.asarray(signal, dtype=float)
+    window_size = 0.05 * len(signal)  # 5% of total duration
+    half_window_samples = int(round(window_size / 2))
+    start_idx = max(0, point_idx - half_window_samples)
+    end_idx = min(len(signal), point_idx + half_window_samples)
+    segment = signal[start_idx:end_idx]
+
+    # time flip the segment
+    flipped_segment = segment[::-1]
+    # remove the middle point if the length is odd
+    if len(segment) % 2 != 0:
+        mid_idx = len(segment) // 2
+        segment = np.delete(segment, mid_idx)
+        flipped_segment = np.delete(flipped_segment, mid_idx)
+    # pearson's correlation between the two
+    if np.std(segment) > 0 and np.std(flipped_segment) > 0:
+        corr = np.corrcoef(segment, flipped_segment)[0, 1]
+
+    return corr  # type: ignore
