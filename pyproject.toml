@@ -17,7 +17,9 @@ dependencies = [
   "pandas>=2.0",
   "matplotlib>=3.8",
   "typer>=0.12", # CLI helper
-  "seaborn>=0.13,<0.14" 
+  "seaborn>=0.13,<0.14", 
+  "pyqt6>=6.5" # For GUI
+
 ]
 
 [project.urls]
