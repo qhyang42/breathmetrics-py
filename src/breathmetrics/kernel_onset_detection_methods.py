@@ -6,6 +6,12 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import ArrayLike
 
+from breathmetrics.utils import (
+    find_inflection,
+    find_inflection_vectorized,
+    find_inflection_from_mid3,
+)
+
 
 ##
 def find_onsets_and_pauses_legacy(
@@ -215,70 +221,33 @@ def find_onsets_and_pauses_legacy(
 
 
 # TODO: insert new inhale onset detection method here.
-def find_onsets_new(
-    resp: ArrayLike, fs: float, peaks: ArrayLike, troughs: ArrayLike
-) -> tuple[np.ndarray, np.ndarray]:
+def find_onsets_new(resp: ArrayLike, fs: float, peaks: ArrayLike) -> np.ndarray:
+    """detect breathing onset from resp peaks
+    INPUTS
+      resp  : breathing signal (vector)
+      fs    : sampling rate (Hz)
+      peaks : respiratory peak indices (samples)
+    OUTPUTS
+      inhaleOnsets : inhale-onset index for each peak (samples)
     """
-    new onset detection method by Adam Dede
-    inputs:
-        resp: respiration signal
-        fs: sampling frequency
-        peaks: indices of inspiratory peaks
-        troughs: indices of expiratory troughs
 
-        outputs:
-            inhaleonsets: indices of inspiratory onsets (detected using new method)
-            exhaleonsets: indices of expiratory onsets (zeros crossing method)
-    The algorithm has two passes:
-     1) For each breath, estimate an initial onset between the trough and
-        peak using local slope and MSE fits.
-     2) Refine onset by scanning candidate points before the peak and
-        picking the location that maximizes a slope-difference metric
-        (left vs right) *biased* toward mid-range amplitudes.
-    """
-    # down sample data to speed up processing
-    smresp = np.asarray(resp, dtype=float)
-    fs = np.round(float(fs))
+    resp = np.asarray(resp, dtype=float)
     peaks = np.asarray(peaks, dtype=int)
-    peaks = np.round(peaks / 10).astype(int)
-    troughs = np.asarray(troughs, dtype=int)
-    troughs = np.round(troughs / 10).astype(int)
+    nsamples = len(resp)
 
-    # first pass: initial onset estimates between trough and peak
-    inhaleonsets = np.zeros_like(peaks)
-    onset_hights = inhaleonsets.astype(float)  # noqa: F841 # TODO: remove
+    inhaleonsets = np.full_like(peaks, np.nan, dtype=float)
+    for i in range(len(peaks)):
+        curidx = peaks[i]
+        winstart = curidx - fs * 3
+        winend1 = curidx
 
-    # reorder peaks and troughs so it goes trough-peak-trough-peak
-    # prepend a trough at max(1, peaks[0] - fs*2)
-    first_trough = int(max(1, peaks[0] - int(fs * 2)))
-    troughs = np.insert(troughs, 0, first_trough)
-    troughs = troughs[:-1]
+        # clamp to signal edges
+        windtart = max(0, int(winstart))
+        winend1 = min(nsamples - 1, int(winend1))
+        insig = resp[windtart:winend1]
 
-    for ii in range(len(peaks)):
-        ti = troughs[ii]
-        pi = peaks[ii]
-        max_offset = pi - ti - int(round(fs / 40))
-        slopes = np.zeros(max_offset, dtype=float)
-        mse = np.zeros(max_offset, dtype=float)
-
-        # for each candidate jj between trouble and peak
-        # compute slope of line btw resp(jj) and resp(pi)
-        # compute mse of line fit from resp(ti:jj)
-
-        for jj in range(ti, pi - int(round(fs / 40))):
-            idx = jj - ti
-            slopes[idx] = (smresp[pi] - smresp[jj]) / (pi - jj)
-
-            x = np.arange(ti, jj + 1)
-            y = smresp[ti : jj + 1]
-            A = np.vstack([x, np.ones(len(x))]).T
-            m, c = np.linalg.lstsq(A, y, rcond=None)[0]
-            yfit = m * x + c
-            mse[idx] = np.mean((y - yfit) ** 2)
-
-    # TODO: wait for Adam to finish the matlab code. might need to disgard this.
-    # Placeholder implementation
-    return np.array([]), np.array([])
+        # TODO: pick up here.
+    return np.array([])
 
 
 # find pause based on two segment slope method. relies on an accurate inhale onset estimate.
