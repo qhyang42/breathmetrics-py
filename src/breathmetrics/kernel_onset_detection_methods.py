@@ -7,7 +7,6 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 from breathmetrics.utils import (
-    find_inflection,
     find_inflection_vectorized,
     find_inflection_from_mid3,
 )
@@ -220,7 +219,8 @@ def find_onsets_and_pauses_legacy(
     return inhaleonsets, exhaleonsets, inhalepauseonsets, exhalepauseonsets
 
 
-# TODO: insert new inhale onset detection method here.
+# Adam's breathing onset detection.
+# TODO: need test.
 def find_onsets_new(resp: ArrayLike, fs: float, peaks: ArrayLike) -> np.ndarray:
     """detect breathing onset from resp peaks
     INPUTS
@@ -230,6 +230,7 @@ def find_onsets_new(resp: ArrayLike, fs: float, peaks: ArrayLike) -> np.ndarray:
     OUTPUTS
       inhaleOnsets : inhale-onset index for each peak (samples)
     """
+    from scipy.ndimage import gaussian_filter1d
 
     resp = np.asarray(resp, dtype=float)
     peaks = np.asarray(peaks, dtype=int)
@@ -246,8 +247,34 @@ def find_onsets_new(resp: ArrayLike, fs: float, peaks: ArrayLike) -> np.ndarray:
         winend1 = min(nsamples - 1, int(winend1))
         insig = resp[windtart:winend1]
 
-        # TODO: pick up here.
-    return np.array([])
+        # mimicking matlab smoothing behavior.
+        # inSig = smoothdata(resp(winStart:winEnd1), 'gaussian', round(fs));
+        win = int(round(fs))
+        sigma = win / 6.0
+        insig_sm = gaussian_filter1d(insig, sigma=sigma, mode="nearest")
+
+        # find initial guess
+        # [adj, _] = find_inflection(insig_sm, slope_based=True)
+        [adj, _] = find_inflection_vectorized(
+            insig_sm, slope_based=True
+        )  # this is a vectorized version of find_inflection. If doesn't work, switch back to the original find_inflection.
+
+        # second pass
+        # winend2 = curidx + round(fs * 0.2)
+        winend2 = curidx  # QY: this works better than a large window in our toy dataset. not sure if this is a generalizable solution. needs testing.
+        winend2 = min(nsamples - 1, int(winend2))
+
+        insig2 = resp[windtart:winend2]
+        win = int(round(fs / 2))
+        sigma = win / 6.0
+        insig2_sm = gaussian_filter1d(insig2, sigma=sigma, mode="nearest")
+
+        # second guess
+        adj2 = find_inflection_from_mid3(insig2_sm, adj, fs, insig2)
+
+        bStart = adj2 + winstart
+        inhaleonsets[i] = bStart
+    return inhaleonsets
 
 
 # find pause based on two segment slope method. relies on an accurate inhale onset estimate.

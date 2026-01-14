@@ -10,6 +10,7 @@
 11/4/2025 feature plotting. need to add the part that plots annotations. (annotation from the GUI?). 
 11/13/2025 ready for GUI and CLI. parts skipped: annotation in feature plotting, ERP plotting, ERP estimate in core, estimate all features in core. 
 12/12/2025 start working on new onset detection method. waiting for Adam to finish matlab version. 
+1/6/2026 add new onset detection method from Adam. Not tested. 
 
 # pipeline from orig breathmetrics toolbox: 
 ## preproc

@@ -71,7 +71,7 @@ def hist_like_matlab(this_window: np.ndarray, custom_bins: np.ndarray):
 
 
 # small helpers used in updated onset detection TODO: need tests
-def find_inflection(sig, slope_based=True):
+def find_inflection(sig, slope_based=True) -> tuple[int, np.ndarray]:
     """
     Find the nearest major inflection point from the end of a signal.
 
@@ -128,7 +128,9 @@ def find_inflection(sig, slope_based=True):
     return inflection, ss_der
 
 
-def find_inflection_vectorized(sig: np.ndarray, slope_based: bool = True):
+def find_inflection_vectorized(
+    sig: np.ndarray, slope_based: bool = True
+) -> tuple[int, np.ndarray]:
     """
     Vectorized O(n) version of MATLAB findInflection (no plotting).
 
@@ -236,7 +238,7 @@ def find_inflection_vectorized(sig: np.ndarray, slope_based: bool = True):
 def find_inflection_from_mid3(
     sig: np.ndarray,
     mid_idx: int,
-    fs: int = 1000,
+    fs: float = 1000,
     sig_raw: np.ndarray | None = None,
 ):
     """
@@ -360,7 +362,7 @@ def find_inflection_upward(sig: np.ndarray, sig_raw: np.ndarray | None = None) -
         peakidx = N - idx_sort[0] - 1
         inflection = peakidx
 
-    return inflection
+    return inflection  # type: ignore
 
 
 def mono_check(vec: np.ndarray, peakidx: int) -> bool:
