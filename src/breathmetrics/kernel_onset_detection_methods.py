@@ -276,7 +276,6 @@ def find_onsets_new(resp: ArrayLike, fs: float, peaks: ArrayLike) -> np.ndarray:
 
 
 # find pause based on two segment slope method. relies on an accurate inhale onset estimate.
-# TODO: needs test
 def find_pause_slope(
     resp: ArrayLike,
     fs: float,
@@ -364,6 +363,191 @@ def find_pause_slope(
             slopeLate = b + c
             if (c < 0) and (abs(slopeEarly) * flat_frac >= slopeLate):
                 # choose 2 steps
+                exhale_offsets[i] = exhaletroughs[i] + best_tauIdx
+            else:
+                exhale_offsets[i] = np.nan
+        else:
+            exhale_offsets[i] = np.nan
+
+    return exhale_offsets
+
+
+# TODO: test this. but this should be faster and behave the same way.
+def find_pause_slope_vectorized(
+    resp: ArrayLike,
+    fs: float,
+    inhaleonsets: ArrayLike,
+    exhaletroughs: ArrayLike,
+    min_edge_ms: float = 200,
+    flat_frac: float = 0.5,
+) -> np.ndarray:
+    """
+    find pause based on two segment slope method.
+    outputs:
+        exhale_offsets: indices of expiratory offsets (same as pause onsets)
+    """
+    x = np.asarray(resp, dtype=float)
+    inhaleonsets = np.asarray(inhaleonsets, dtype=int)
+    exhaletroughs = np.asarray(exhaletroughs, dtype=int)
+    fs = float(fs)
+
+    exhale_offsets = np.full_like(exhaletroughs, np.nan, dtype=float)[:-1]
+
+    tiny = np.finfo(float).tiny
+
+    def _fit_1step_bic_and_slope(
+        y0: np.ndarray, t: np.ndarray
+    ) -> tuple[float, float, float]:
+        """
+        Fit y = a + b t (OLS), return (bic1, rss1, slope b).
+        Uses normal equations with sums (no lstsq).
+        """
+        n = y0.size
+        # Sums
+        S1 = float(n)
+        St = float(np.sum(t))
+        St2 = float(np.sum(t * t))
+        Sy = float(np.sum(y0))
+        Sty = float(np.sum(t * y0))
+        yTy = float(np.sum(y0 * y0))
+
+        # Solve 2x2: [[S1, St],[St, St2]] [a,b] = [Sy, Sty]
+        det = S1 * St2 - St * St
+        if det == 0.0:
+            # Degenerate t (shouldn't happen with arange/fs), fallback consistent with "bad fit"
+            rss1 = yTy
+            b = 0.0
+        else:
+            a = (Sy * St2 - Sty * St) / det
+            b = (S1 * Sty - St * Sy) / det
+            # rss = y'y - beta^T X^T y  (since OLS)
+            rss1 = yTy - (a * Sy + b * Sty)
+
+        rss1 = float(max(rss1, 0.0))
+        bic1 = n * np.log(max(rss1 / n, tiny)) + 2 * np.log(n)
+        return float(bic1), float(rss1), float(b)
+
+    def _best_hinge_fit(
+        y0: np.ndarray, t: np.ndarray, min_edge: int
+    ) -> tuple[float, np.ndarray | None, int]:
+        """
+        Fit y = a + b t + c * max(0, t - tau) for tau = t[k], k in [min_edge, n-min_edge-1]
+        Returns (best_rss, best_beta [a,b,c], best_tauIdx).
+        Uses suffix sums so each candidate is O(1) + a 3x3 solve.
+        """
+        n = y0.size
+        tau_candidates = range(min_edge, n - min_edge)
+
+        # Precompute global sums
+        S1 = float(n)
+        St = float(np.sum(t))
+        St2 = float(np.sum(t * t))
+        Sy = float(np.sum(y0))
+        Sty = float(np.sum(t * y0))
+        yTy = float(np.sum(y0 * y0))
+
+        # Suffix sums for fast hinge-related sums over j>=k
+        # (store as float arrays for speed)
+        t_f = t.astype(float, copy=False)
+        y_f = y0.astype(float, copy=False)
+
+        suf1 = np.empty(n + 1, dtype=float)  # counts (as float)
+        suft = np.empty(n + 1, dtype=float)  # sum t
+        suft2 = np.empty(n + 1, dtype=float)  # sum t^2
+        sufy = np.empty(n + 1, dtype=float)  # sum y
+        sufty = np.empty(n + 1, dtype=float)  # sum t*y
+
+        suf1[n] = 0.0
+        suft[n] = 0.0
+        suft2[n] = 0.0
+        sufy[n] = 0.0
+        sufty[n] = 0.0
+        for i in range(n - 1, -1, -1):
+            suf1[i] = suf1[i + 1] + 1.0
+            suft[i] = suft[i + 1] + t_f[i]
+            suft2[i] = suft2[i + 1] + t_f[i] * t_f[i]
+            sufy[i] = sufy[i + 1] + y_f[i]
+            sufty[i] = sufty[i + 1] + t_f[i] * y_f[i]
+
+        best_rss = np.inf
+        best_beta = None
+        best_tauIdx = int(min_edge)
+
+        for k in tau_candidates:
+            tau = float(t_f[k])
+            m = suf1[
+                k
+            ]  # number of points with t >= tau (since tau=t[k] and t is increasing)
+            sum_t = suft[k]
+            sum_t2 = suft2[k]
+            sum_y = sufy[k]
+            sum_ty = sufty[k]
+
+            # hinge sums over j>=k where h = t - tau, else 0
+            Sh = sum_t - m * tau
+            Sth = sum_t2 - tau * sum_t
+            Sh2 = sum_t2 - 2.0 * tau * sum_t + m * tau * tau
+            Syh = sum_ty - tau * sum_y
+
+            # Build XtX and XtY for X=[1, t, h]
+            XtX = np.array(
+                [
+                    [S1, St, Sh],
+                    [St, St2, Sth],
+                    [Sh, Sth, Sh2],
+                ],
+                dtype=float,
+            )
+            XtY = np.array([Sy, Sty, Syh], dtype=float)
+
+            # Solve (XtX) beta = XtY
+            # If singular/ill-conditioned, skip this tau (same effect as "not best")
+            try:
+                beta = np.linalg.solve(XtX, XtY)
+            except np.linalg.LinAlgError:
+                continue
+
+            # rss = y'y - beta^T XtY
+            rss = yTy - float(beta @ XtY)
+            rss = float(max(rss, 0.0))
+
+            if rss < best_rss:
+                best_rss = rss
+                best_beta = beta
+                best_tauIdx = int(k)
+
+        return float(best_rss), best_beta, best_tauIdx
+
+    for i in range(len(exhaletroughs) - 1):
+        start = exhaletroughs[i]
+        end = inhaleonsets[i + 1]
+        y = x[start:end]
+        n = y.size
+        if n == 0:
+            exhale_offsets[i] = np.nan
+            continue
+
+        t = np.arange(n, dtype=float) / fs
+        y0 = y - float(np.mean(y))
+
+        # ----- 1-step
+        bic1, rss1, _b = _fit_1step_bic_and_slope(y0, t)
+
+        # ----- 2-step (hinge)
+        minEdge = max(1, int(np.floor(min_edge_ms / 1000.0 * fs)))
+        if n - 2 * minEdge < 1:
+            exhale_offsets[i] = np.nan
+            continue
+
+        best_rss, best_beta, best_tauIdx = _best_hinge_fit(y0, t, minEdge)
+        bic2 = n * np.log(max(best_rss / n, tiny)) + 4 * np.log(n)
+
+        # ---- decision rule --- #
+        if (bic2 < bic1) and (best_beta is not None):
+            a, b, c = best_beta
+            slopeEarly = b
+            slopeLate = b + c
+            if (c < 0) and (abs(slopeEarly) * flat_frac >= slopeLate):
                 exhale_offsets[i] = exhaletroughs[i] + best_tauIdx
             else:
                 exhale_offsets[i] = np.nan
