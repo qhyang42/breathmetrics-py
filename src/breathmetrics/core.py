@@ -136,6 +136,8 @@ class bm:
             self.bsl_corrected_respiration, self.inhale_peaks, self.exhale_troughs
         )
 
+    # TODO: add new inhale onset detection and pause detection here. Keep all other parameters from the old method.
+
     def find_resp_durations(self):
         (
             self.inhale_durations,
