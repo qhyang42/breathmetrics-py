@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tabnanny import verbose
 import numpy as np
 from numpy.typing import ArrayLike
 from dataclasses import dataclass
@@ -231,3 +232,55 @@ class bm:
         return None
 
     ## esitmate all features. call all methods in order.
+    def estimate_all_features(
+        self, *, compute_secondary: bool = False, verbose: bool = False
+    ) -> None:
+        """
+        Run the full BreathMetrics feature estimation pipeline in the correct order.
+        Sets `feature_estimations_complete` when finished.
+
+        Parameters
+        ----------
+        compute_secondary : bool
+            If True, also compute and store secondary summary features.
+        verbose : bool
+            If True, print simple progress messages.
+        """
+        if verbose:
+            print("BreathMetrics: estimating all features...")
+
+        # 0) Preconditions
+        if (
+            not hasattr(self, "smoothed_respitation")
+            or self.smoothed_respitation is None
+        ):
+            raise ValueError(
+                "smoothed_respitation is missing. Did __init__ finish preprocessing?"
+            )
+
+        # 1) Baseline correction
+        self.correct_resp_to_baseline()
+
+        # 2) Extrema
+        self.find_extrema()
+
+        # 3) Onsets/offsets/pauses
+        self.find_onsets_and_pauses()
+
+        # 4) Durations
+        self.find_resp_durations()
+
+        # 5) Volume (if applicable / desired)
+        # Some datatypes may not support it—up to you if you want guards here.
+        self.find_resp_volume()
+
+        # 6) Secondary summary (optional)
+        if compute_secondary:
+            self.secondary_features = self.get_secondary_respiratory_features(
+                verbose=verbose
+            )
+
+        self.feature_estimations_complete = True
+
+    if verbose:
+        print("BreathMetrics: done.")

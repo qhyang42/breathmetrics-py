@@ -6,11 +6,17 @@ import pandas as pd
 from breathmetrics.kernel import (
     correct_respiration_to_baseline,
     find_respiratory_extrema,
-    find_respiratory_offsets,
-    find_respiratory_durations,
     find_respiratory_volume,
+    find_respiratory_durations,
+    find_respiratory_offsets,
 )
-from breathmetrics.kernel_onset_detection_methods import find_onsets_and_pauses_legacy
+from breathmetrics.kernel_onset_detection_methods import (
+    find_onsets_and_pauses_legacy,
+    find_onsets_new,
+    find_pause_slope,
+)
+
+import matplotlib.pyplot as plt
 
 # %% load data
 data = pd.read_csv("../data/resp_1.csv")
@@ -65,4 +71,21 @@ inhale_volume, exhale_volume = find_respiratory_volume(
     resp_corrected, inhaleonset, inhale_offset, exhaleonset, exhale_offset, fs
 )
 
+# %% test new onset detection.
+inhaleonset_new = find_onsets_new(resp_corrected, fs, corrected_peaks)
+
+# %% plot
+# plt.plot(resp_corrected[0:20000])
+# plt.plot(inhaleonset_new[0:4], resp_corrected[inhaleonset_new[0:4].astype(int)], "ro")
+
+# plt.plot(inhaleonset[0:4], resp_corrected[inhaleonset[0:4].astype(int)], "bo")
+
+# %%
+# test pause slope
+pause_new = find_pause_slope(resp_corrected, fs, inhaleonset_new, corrected_troughs)
+# %%
+plt.plot(resp_corrected[0:20000])
+plt.plot(inhaleonset_new[0:4], resp_corrected[inhaleonset_new[0:4].astype(int)], "ro")
+
+plt.plot(pause_new[0:4], resp_corrected[pause_new[0:4].astype(int)], "bo")
 # %%

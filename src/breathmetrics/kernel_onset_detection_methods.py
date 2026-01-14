@@ -220,7 +220,6 @@ def find_onsets_and_pauses_legacy(
 
 
 # Adam's breathing onset detection.
-# TODO: need test.
 def find_onsets_new(resp: ArrayLike, fs: float, peaks: ArrayLike) -> np.ndarray:
     """detect breathing onset from resp peaks
     INPUTS
@@ -243,9 +242,9 @@ def find_onsets_new(resp: ArrayLike, fs: float, peaks: ArrayLike) -> np.ndarray:
         winend1 = curidx
 
         # clamp to signal edges
-        windtart = max(0, int(winstart))
+        winstart = max(0, int(winstart))
         winend1 = min(nsamples - 1, int(winend1))
-        insig = resp[windtart:winend1]
+        insig = resp[winstart:winend1]
 
         # mimicking matlab smoothing behavior.
         # inSig = smoothdata(resp(winStart:winEnd1), 'gaussian', round(fs));
@@ -264,14 +263,13 @@ def find_onsets_new(resp: ArrayLike, fs: float, peaks: ArrayLike) -> np.ndarray:
         winend2 = curidx  # QY: this works better than a large window in our toy dataset. not sure if this is a generalizable solution. needs testing.
         winend2 = min(nsamples - 1, int(winend2))
 
-        insig2 = resp[windtart:winend2]
+        insig2 = resp[winstart:winend2]
         win = int(round(fs / 2))
         sigma = win / 6.0
         insig2_sm = gaussian_filter1d(insig2, sigma=sigma, mode="nearest")
 
         # second guess
         adj2 = find_inflection_from_mid3(insig2_sm, adj, fs, insig2)
-
         bStart = adj2 + winstart
         inhaleonsets[i] = bStart
     return inhaleonsets
@@ -286,7 +284,7 @@ def find_pause_slope(
     exhaletroughs: ArrayLike,
     min_edge_ms: float = 200,
     flat_frac: float = 0.5,
-) -> tuple[np.ndarray]:
+) -> np.ndarray:
     """
     find pause based on two segment slope method.
     inputs:
@@ -310,7 +308,7 @@ def find_pause_slope(
         # slope segment based pause detection here
         y = inhalewindow[:]
         n = len(y)
-        t = np.arange(n - 1) / fs  # time in s
+        t = np.arange(n) / fs  # time in s
         y0 = y - np.mean(y)
 
         # steps:
@@ -346,7 +344,7 @@ def find_pause_slope(
         best_tauIdx = 0
         for tauidx in range(minEdge, n - minEdge):
             tau = t[tauidx]
-            hinge = np.max(0, t - tau)
+            hinge = np.maximum(0, t - tau)
             X2 = np.column_stack((np.ones(n), t, hinge))
             b2, *_ = np.linalg.lstsq(X2, y0, rcond=None)
             yhat2 = X2 @ b2
@@ -372,4 +370,4 @@ def find_pause_slope(
         else:
             exhale_offsets[i] = np.nan
 
-    return exhale_offsets  # type: ignore
+    return exhale_offsets

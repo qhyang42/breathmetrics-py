@@ -11,7 +11,7 @@
 11/13/2025 ready for GUI and CLI. parts skipped: annotation in feature plotting, ERP plotting, ERP estimate in core, estimate all features in core. 
 12/12/2025 start working on new onset detection method. waiting for Adam to finish matlab version. 
 1/6/2026 add new onset detection method from Adam. Not tested. 
-
+1/7/2026 all primary feature debug complete. (they run at least)
 # pipeline from orig breathmetrics toolbox: 
 ## preproc
 check input. i can take numpy array, CSV, .mat file. reshape to single vector 

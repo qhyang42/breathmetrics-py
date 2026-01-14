@@ -9,8 +9,6 @@ from numpy.typing import ArrayLike
 # kernel.py  (pure function)
 from .utils import detrend_linear, fft_smooth, zscore
 
-# TODO: all the functions here need tests.
-
 
 def correct_respiration_to_baseline(
     resp: np.ndarray,
@@ -37,42 +35,6 @@ def correct_respiration_to_baseline(
         x_corr = zscore(x_corr)
 
     return x_corr
-
-
-## find extrema
-# don't know why this is here. could be useless. qy 9/29/2025. ---ignore---
-# def _find_respiratory_extrema_basic(
-#     signal: np.ndarray,
-#     distance: int | None = None,
-#     prominence: float | None = None,
-# ) -> tuple[np.ndarray, np.ndarray]:
-#     """
-#     Find local maxima ('peaks') and minima ('troughs').
-#     Uses scipy.signal.find_peaks if available; otherwise a simple NumPy fallback.
-#     Returns (peaks_idx, troughs_idx) as integer arrays.
-#     """
-#     x = np.asarray(signal, dtype=float)
-
-#     try:
-#         from scipy.signal import find_peaks  # optional
-
-#         peaks, _ = find_peaks(x, distance=distance, prominence=prominence)
-#         troughs, _ = find_peaks(-x, distance=distance, prominence=prominence)
-#         return peaks.astype(int), troughs.astype(int)
-#     except Exception:
-#         # Fallback: strict neighbor test
-#         # A point i is a local max if x[i-1] < x[i] > x[i+1]; min if x[i-1] > x[i] < x[i+1]
-#         if x.size < 3:
-#             return np.array([], dtype=int), np.array([], dtype=int)
-#         dx1 = x[1:-1] - x[:-2]
-#         dx2 = x[1:-1] - x[2:]
-#         peaks = np.where((dx1 > 0) & (dx2 > 0))[0] + 1
-#         troughs = np.where((dx1 < 0) & (dx2 < 0))[0] + 1
-#         if distance and distance > 1:
-#             # crude distance enforcement: keep every 'distance'-th candidate
-#             peaks = peaks[:: max(1, int(distance))]
-#             troughs = troughs[:: max(1, int(distance))]
-#         return peaks.astype(int), troughs.astype(int)
 
 
 # find extrema with sliding window voting
