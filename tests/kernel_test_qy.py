@@ -14,6 +14,7 @@ from breathmetrics.kernel_onset_detection_methods import (
     find_onsets_and_pauses_legacy,
     find_onsets_new,
     find_pause_slope,
+    find_pause_slope_vectorized,
 )
 
 import matplotlib.pyplot as plt
@@ -83,9 +84,15 @@ inhaleonset_new = find_onsets_new(resp_corrected, fs, corrected_peaks)
 # %%
 # test pause slope
 pause_new = find_pause_slope(resp_corrected, fs, inhaleonset_new, corrected_troughs)
+
+# %% test vectorized pause slope
+pause_new_vec = find_pause_slope_vectorized(
+    resp_corrected, fs, inhaleonset_new, corrected_troughs
+)
+
 # %%
 plt.plot(resp_corrected[0:20000])
 plt.plot(inhaleonset_new[0:4], resp_corrected[inhaleonset_new[0:4].astype(int)], "ro")
 
-plt.plot(pause_new[0:4], resp_corrected[pause_new[0:4].astype(int)], "bo")
+plt.plot(pause_new_vec[0:4], resp_corrected[pause_new_vec[0:4].astype(int)], "bo")
 # %%

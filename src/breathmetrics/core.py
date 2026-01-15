@@ -137,7 +137,23 @@ class bm:
             self.bsl_corrected_respiration, self.inhale_peaks, self.exhale_troughs
         )
 
-    # TODO: add new inhale onset detection and pause detection here. Keep all other parameters from the old method.
+    # new method for inhale onset and exhale onset detection. rely on previous output.
+    def find_inhale_onsets_new(self):
+        self.inhale_onsets = (
+            breathmetrics.kernel_onset_detection_methods.find_onsets_new(
+                self.bsl_corrected_respiration, self.srate, self.inhale_peaks
+            )
+        )
+
+    def find_pause_slope(self):
+        self.exhale_pause_onsets = (
+            breathmetrics.kernel_onset_detection_methods.find_pause_slope_vectorized(
+                self.bsl_corrected_respiration,
+                self.srate,
+                self.inhale_onsets,
+                self.exhale_troughs,
+            )
+        )
 
     def find_resp_durations(self):
         (
@@ -266,6 +282,10 @@ class bm:
 
         # 3) Onsets/offsets/pauses
         self.find_onsets_and_pauses()
+
+        # 3.5) call the new methods here.
+        self.find_inhale_onsets_new()
+        self.find_pause_slope()
 
         # 4) Durations
         self.find_resp_durations()

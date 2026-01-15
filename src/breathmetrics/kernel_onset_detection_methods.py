@@ -372,7 +372,6 @@ def find_pause_slope(
     return exhale_offsets
 
 
-# TODO: test this. but this should be faster and behave the same way.
 def find_pause_slope_vectorized(
     resp: ArrayLike,
     fs: float,
