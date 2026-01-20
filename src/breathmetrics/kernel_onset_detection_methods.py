@@ -553,4 +553,6 @@ def find_pause_slope_vectorized(
         else:
             exhale_offsets[i] = np.nan
 
-    return exhale_offsets
+    # no but actually this is exhale pause onset instead of exhale offset
+    exhale_pause_onsets = exhale_offsets
+    return exhale_pause_onsets

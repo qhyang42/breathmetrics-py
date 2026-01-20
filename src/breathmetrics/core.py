@@ -131,8 +131,8 @@ class bm:
         (
             self.inhale_onsets,
             self.exhale_onsets,
-            self.inhale_offsets,
-            self.exhale_offsets,
+            self.inhale_pause_onsets,
+            self.exhale_pause_onsets,
         ) = breathmetrics.kernel_onset_detection_methods.find_onsets_and_pauses_legacy(
             self.bsl_corrected_respiration, self.inhale_peaks, self.exhale_troughs
         )
@@ -152,6 +152,17 @@ class bm:
                 self.srate,
                 self.inhale_onsets,
                 self.exhale_troughs,
+            )
+        )
+
+    def find_respiratory_offsets(self):
+        (self.inhale_offsets, self.exhale_offsets) = (
+            breathmetrics.kernel.find_respiratory_offsets(
+                self.bsl_corrected_respiration,
+                self.inhale_onsets,
+                self.exhale_onsets,
+                self.inhale_pause_onsets,
+                self.exhale_pause_onsets,
             )
         )
 
