@@ -12,20 +12,23 @@ import breathmetrics.utils
 
 
 @dataclass
-class bm:
+class Breathe:  # this might be too cute. Consider changing back to class BreathMetrics:
     """
-    Breathmetrics class.
+    Stateful breathing-analysis pipeline.
+
+    Initializes with a respiration signal and incrementally
+    detects, parameterizes, and edits breathing features.
 
     """
 
     # signal properties:
     datatype: str
-    fs: float  # sampling rate (Hz)
+    srate: float  # sampling rate (Hz)
     time: np.ndarray
 
     # breathing signal
     raw_respiration: np.ndarray
-    smoothed_respitation: np.ndarray
+    smoothed_respiration: np.ndarray
     bsl_corrected_respiration: np.ndarray
 
     # calculated features
@@ -103,19 +106,21 @@ class bm:
             print(
                 "Notice: Only certain features can be derived from rodent thermocouple data"
             )
+        else:
+            smoothwin = 50  # TODO this is not quite right. if datatype is illegal, give warning and quit?
 
-            corrected_smooth_window = np.floor((self.srate / 1000) * smoothwin)
-            self.smoothed_respitation = breathmetrics.utils.fft_smooth(
-                self.raw_respiration, corrected_smooth_window
-            )
-            self.time = np.arange(1, len(signal) / self.srate, 1 / self.srate)
+        corrected_smooth_window = np.floor((self.srate / 1000) * smoothwin)
+        self.smoothed_respiration = breathmetrics.utils.fft_smooth(
+            self.raw_respiration, corrected_smooth_window.astype(int)
+        )
+        self.time = np.arange(1, len(signal) / self.srate, 1 / self.srate)
 
         # correct resp to baseline
 
     def correct_resp_to_baseline(self):
         self.bsl_corrected_respiration = (
             breathmetrics.kernel.correct_respiration_to_baseline(
-                self.smoothed_respitation, self.fs
+                self.smoothed_respiration, self.srate
             )
         )
 
@@ -278,11 +283,11 @@ class bm:
 
         # 0) Preconditions
         if (
-            not hasattr(self, "smoothed_respitation")
-            or self.smoothed_respitation is None
+            not hasattr(self, "smoothed_respiration")
+            or self.smoothed_respiration is None
         ):
             raise ValueError(
-                "smoothed_respitation is missing. Did __init__ finish preprocessing?"
+                "smoothed_respiration is missing. Did __init__ finish preprocessing?"
             )
 
         # 1) Baseline correction
@@ -294,9 +299,11 @@ class bm:
         # 3) Onsets/offsets/pauses
         self.find_onsets_and_pauses()
 
-        # 3.5) call the new methods here.
+        # call the new methods here.
         self.find_inhale_onsets_new()
         self.find_pause_slope()
+
+        self.find_respiratory_offsets()
 
         # 4) Durations
         self.find_resp_durations()

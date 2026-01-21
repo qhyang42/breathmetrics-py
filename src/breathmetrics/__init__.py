@@ -1,4 +1,4 @@
-__all__ = ["bm"]
-from .core import bm
+__all__ = ["Breathe"]
+from .core import Breathe
 
 __version__ = "0.1.0"

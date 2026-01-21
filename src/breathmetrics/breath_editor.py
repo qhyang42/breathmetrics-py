@@ -93,7 +93,7 @@ class BreathEditor:
         model: object,
         *,
         resp_attr: str = "bsl_corrected_respiration",
-        fs_attr: str = "fs",
+        fs_attr: str = "srate",
         # optional: if your model ever uses a different attribute name later
         is_valid_attr: str = "is_valid",
     ) -> None:
