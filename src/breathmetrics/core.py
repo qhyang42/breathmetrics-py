@@ -322,3 +322,15 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
 
     if verbose:
         print("BreathMetrics: done.")
+
+    def inspect(self):  # place holder for GUI
+        # from breathmetrics import breathmetrics_gui
+        return None
+
+    def behold(self):
+        """Alias for inspect()."""
+        import sys
+
+        if sys.stdout.isatty():
+            print("Tada! ✨")
+        return self.inspect()
