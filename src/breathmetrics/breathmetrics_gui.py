@@ -47,7 +47,7 @@ FloatArray = NDArray[np.float64]
 
 # load and verify object
 _REQUIRED_ATTRS = (
-    "fs",
+    "srate",
     "bsl_corrected_respiration",
     "inhale_onsets",
     "exhale_offsets",
@@ -418,7 +418,7 @@ class BreathMetricsMainWindow(QMainWindow):
         Since we plot in absolute seconds, conversion is direct.
         """
         i = self.current_idx
-        fs = float(self.bm.fs)
+        fs = float(self.bm.srate)
         new_sample = int(round(x_seconds * fs))
 
         res = self.editor.move_event(i, event, new_sample)
@@ -436,7 +436,7 @@ class BreathMetricsMainWindow(QMainWindow):
 
     def _refresh_row(self, i: int) -> None:
         """Refresh table row i from bm (onset/offset/status)."""
-        fs = float(self.bm.fs)
+        fs = float(self.bm.srate)
         onset_s = float(self.bm.inhale_onsets[i]) / fs
         offset_s = float(self.bm.exhale_offsets[i]) / fs
 
@@ -672,7 +672,7 @@ class BreathMetricsMainWindow(QMainWindow):
     # ----------------------------
 
     def _make_rows_from_bm(self) -> list[BreathRow]:
-        fs = float(self.bm.fs)
+        fs = float(self.bm.srate)
         inhale_onsets = np.asarray(self.bm.inhale_onsets, dtype=float)
         exhale_offsets = np.asarray(self.bm.exhale_offsets, dtype=float)
 
@@ -697,7 +697,7 @@ class BreathMetricsMainWindow(QMainWindow):
         return rows
 
     def _breath_state_from_bm(self, idx: int, n: int) -> BreathViewState:
-        fs = float(self.bm.fs)
+        fs = float(self.bm.srate)
 
         # breath window definition per your spec:
         start = int(round(float(self.bm.inhale_onsets[idx])))
