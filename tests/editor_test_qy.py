@@ -110,7 +110,7 @@ pretty(s2)
 def plot_breath(
     bm, i: int, pad_s: float = 1.0, use_resp: str = "bsl_corrected_respiration"
 ):
-    fs = float(bm.fs)
+    fs = float(bm.srate)
     y = np.asarray(getattr(bm, use_resp), dtype=float)
 
     onset = int(bm.inhale_onsets[i])
@@ -151,3 +151,5 @@ def plot_breath(
 
 # Use it:
 plot_breath(bm_obj, 10)
+
+# %%

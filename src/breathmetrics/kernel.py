@@ -429,6 +429,24 @@ def find_respiratory_volume(
     return inhale_volumes, exhale_volumes
 
 
+def find_time_to_peak_trough(
+    inhale_onsets: np.ndarray,
+    exhale_onsets: np.ndarray,
+    inhale_peaks: np.ndarray,
+    exhale_troughs: np.ndarray,
+    fs: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    compute inhale time to peak and exhale time to trough
+    """
+    inhale_time2peak = np.zeros_like(inhale_onsets, dtype=float)
+    exhale_time2trough = np.zeros_like(exhale_onsets, dtype=float)
+
+    inhale_time2peak = (inhale_peaks - inhale_onsets) / fs
+    exhale_time2trough = (exhale_troughs - exhale_onsets) / fs
+    return inhale_time2peak, exhale_time2trough
+
+
 ## calculate secondary features
 ## create resp ERPs
 def create_respiratory_erp_matrix(

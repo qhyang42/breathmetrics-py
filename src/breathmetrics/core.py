@@ -160,6 +160,17 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
             )
         )
 
+    def find_time2peaktrough(self):
+        self.inhale_time2peak, self.exhale_time2trough = (
+            breathmetrics.kernel.find_time_to_peak_trough(
+                self.inhale_onsets,
+                self.inhale_peaks,
+                self.exhale_onsets,
+                self.exhale_troughs,
+                self.srate,
+            )
+        )
+
     def find_respiratory_offsets(self):
         (self.inhale_offsets, self.exhale_offsets) = (
             breathmetrics.kernel.find_respiratory_offsets(
@@ -307,6 +318,7 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
 
         # 4) Durations
         self.find_resp_durations()
+        self.find_time2peaktrough()
 
         # 5) Volume (if applicable / desired)
         # Some datatypes may not support it—up to you if you want guards here.

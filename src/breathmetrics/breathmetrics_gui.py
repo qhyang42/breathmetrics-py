@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Callable, Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -38,8 +38,43 @@ from PyQt6.QtWidgets import (
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
+from breathmetrics.breath_editor import BreathEditor, EventType
+
+# from breathmetrics.breath_editor import BreathEditor, EventType, EditResult
+
 
 FloatArray = NDArray[np.float64]
+
+# load and verify object
+_REQUIRED_ATTRS = (
+    "fs",
+    "bsl_corrected_respiration",
+    "inhale_onsets",
+    "exhale_offsets",
+    "exhale_onsets",
+    "inhale_pause_onsets",
+    "exhale_pause_onsets",
+)
+
+
+def _validate_bm_obj(bm_obj: Any) -> None:
+    if bm_obj is None:
+        raise ValueError(
+            "bm_obj is None.\n\n"
+            "Initialize your BreathMetrics object and run estimate_all_features() first, e.g.:\n"
+            "  bm_obj = breathmetrics.Breathe(...)\n"
+            "  bm_obj.estimate_all_features(...)\n"
+            "Then launch the GUI with:\n"
+            "  BreathMetricsMainWindow(bm_obj)"
+        )
+
+    missing = [a for a in _REQUIRED_ATTRS if not hasattr(bm_obj, a)]
+    if missing:
+        raise ValueError(
+            "bm_obj does not look like an initialized/estimated BreathMetrics object.\n"
+            f"Missing attributes: {missing}\n\n"
+            "Did you forget to run estimate_all_features()?"
+        )
 
 
 # ----------------------------
@@ -84,6 +119,17 @@ class BreathPlotCanvas(FigureCanvas):
         super().__init__(fig)
         self.setParent(parent)
         self._default()
+        # --- NEW: interactive dragging state ---
+        self._dragging: Optional[EventType] = None
+        self._marker_xs: dict[EventType, float] = {}
+        self._pick_radius_s: float = 0.15  # seconds (tune)
+
+        # callback set by MainWindow:
+        self.on_move_requested: Optional[Callable[[EventType, float], None]] = None
+
+        self.mpl_connect("button_press_event", self._on_press)
+        self.mpl_connect("motion_notify_event", self._on_motion)
+        self.mpl_connect("button_release_event", self._on_release)
 
     def _default(self) -> None:
         self.ax.clear()
@@ -134,11 +180,50 @@ class BreathPlotCanvas(FigureCanvas):
         mark(state.inhale_pause_t, y_at(state.inhale_pause_t), "", "#12b8b0")
         mark(state.exhale_t, y_at(state.exhale_t), "", "#c9bf2a")
         mark(state.exhale_pause_t, y_at(state.exhale_pause_t), "Next Inhale", "black")
+        # --- store marker x positions for hit testing ---
+        self._marker_xs = {}
+        if state.inhale_t is not None and np.isfinite(state.inhale_t):
+            self._marker_xs[EventType.INHALE_ONSET] = float(state.inhale_t)
+        if state.exhale_t is not None and np.isfinite(state.exhale_t):
+            self._marker_xs[EventType.EXHALE_ONSET] = float(state.exhale_t)
+        if state.inhale_pause_t is not None and np.isfinite(state.inhale_pause_t):
+            self._marker_xs[EventType.INHALE_PAUSE_ONSET] = float(state.inhale_pause_t)
+        if state.exhale_pause_t is not None and np.isfinite(state.exhale_pause_t):
+            self._marker_xs[EventType.EXHALE_PAUSE_ONSET] = float(state.exhale_pause_t)
 
         self.ax.set_title(
             f"Breath {state.breath_index + 1}/{state.n_breaths} ({state.status})"
         )
         self.draw_idle()
+
+    # --- interactive dragging methods ---
+    def _hit_test(self, x: float) -> Optional[EventType]:
+        best_ev: Optional[EventType] = None
+        best_d: float = float("inf")
+        for ev, mx in self._marker_xs.items():
+            d = abs(mx - x)
+            if d <= self._pick_radius_s and d < best_d:
+                best_d = d
+                best_ev = ev
+        return best_ev
+
+    def _on_press(self, event) -> None:
+        if event.inaxes != self.ax or event.xdata is None:
+            return
+        ev = self._hit_test(float(event.xdata))
+        self._dragging = ev
+
+    def _on_motion(self, event) -> None:
+        if self._dragging is None:
+            return
+        if event.inaxes != self.ax or event.xdata is None:
+            return
+        if self.on_move_requested is not None:
+            self.on_move_requested(self._dragging, float(event.xdata))
+
+    def _on_release(self, event) -> None:
+        _ = event
+        self._dragging = None
 
 
 # ----------------------------
@@ -219,14 +304,18 @@ class FeatureCard(QFrame):
 
 
 class BreathMetricsMainWindow(QMainWindow):
-    def __init__(self) -> None:
+    def __init__(self, bm_obj) -> None:
         super().__init__()
+        _validate_bm_obj(bm_obj)  # validate input object
+
         self.setWindowTitle("BreathMetrics GUI")
         self.resize(1500, 800)
 
-        self.breath_rows: list[BreathRow] = self._make_fake_rows(n=130)
+        self.bm = bm_obj
+        self.editor = BreathEditor(self.bm)
+
         self.current_idx: int = 0
-        self.fs: float = 100.0
+        self.breath_rows: list[BreathRow] = self._make_rows_from_bm()
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -323,6 +412,53 @@ class BreathMetricsMainWindow(QMainWindow):
             """
         )
 
+    def _handle_move_requested(self, event: EventType, x_seconds: float) -> None:
+        """
+        Called by canvas while dragging.
+        Since we plot in absolute seconds, conversion is direct.
+        """
+        i = self.current_idx
+        fs = float(self.bm.fs)
+        new_sample = int(round(x_seconds * fs))
+
+        res = self.editor.move_event(i, event, new_sample)
+
+        # Update table onset/offset if inhale onset changed (optional but nice)
+        if event == EventType.INHALE_ONSET:
+            self._refresh_row(i)
+
+        # Redraw
+        self._select_breath(i)
+
+        # Optional status feedback
+        if res.was_clamped:
+            self._stub("Clamped to preserve event order")
+
+    def _refresh_row(self, i: int) -> None:
+        """Refresh table row i from bm (onset/offset/status)."""
+        fs = float(self.bm.fs)
+        onset_s = float(self.bm.inhale_onsets[i]) / fs
+        offset_s = float(self.bm.exhale_offsets[i]) / fs
+
+        is_valid = getattr(self.bm, "is_valid", None)
+        status = "valid"
+        if is_valid is not None and not bool(np.asarray(is_valid, dtype=bool)[i]):
+            status = "rejected"
+
+        self.breath_rows[i] = BreathRow(
+            breath_no=i + 1, onset_s=onset_s, offset_s=offset_s, status=status
+        )
+
+        item_on = self.table.item(i, 1)
+        item_off = self.table.item(i, 2)
+        item_status = self.table.item(i, 3)
+        if item_on is not None:
+            item_on.setText(f"{onset_s:.4f}")
+        if item_off is not None:
+            item_off.setText(f"{offset_s:.4f}")
+        if item_status is not None:
+            item_status.setText(status)
+
     # ----------------------------
     # UI builders
     # ----------------------------
@@ -368,8 +504,8 @@ class BreathMetricsMainWindow(QMainWindow):
 
         self.add_note_btn.clicked.connect(lambda: self._stub("Add note"))
         self.reject_btn.clicked.connect(self._toggle_reject_current)
-        self.undo_btn.clicked.connect(lambda: self._stub("Undo changes"))
-        self.save_all_btn.clicked.connect(lambda: self._stub("Save all changes"))
+        self.undo_btn.clicked.connect(self._undo_current_breath)
+        self.save_all_btn.clicked.connect(self._save_all_changes)
 
         gl.addWidget(self.add_note_btn)
         gl.addWidget(self.reject_btn)
@@ -390,6 +526,9 @@ class BreathMetricsMainWindow(QMainWindow):
         gl.setSpacing(10)
 
         self.canvas = BreathPlotCanvas()
+        # --- connect canvas dragging to editor ---
+        self.canvas.on_move_requested = self._handle_move_requested
+
         gl.addWidget(self.canvas, stretch=1)
 
         cards = QGridLayout()
@@ -406,22 +545,16 @@ class BreathMetricsMainWindow(QMainWindow):
         )
 
         if self.card_inhale_pause.create_btn is not None:
-            self.card_inhale_pause.create_btn.clicked.connect(
-                lambda: self._stub("Create inhale pause")
-            )
+            self.card_inhale_pause.create_btn.clicked.connect(self._create_inhale_pause)
+
         if self.card_inhale_pause.remove_btn is not None:
-            self.card_inhale_pause.remove_btn.clicked.connect(
-                lambda: self._stub("Remove inhale pause")
-            )
+            self.card_inhale_pause.remove_btn.clicked.connect(self._remove_inhale_pause)
 
         if self.card_exhale_pause.create_btn is not None:
-            self.card_exhale_pause.create_btn.clicked.connect(
-                lambda: self._stub("Create exhale pause")
-            )
+            self.card_exhale_pause.create_btn.clicked.connect(self._create_exhale_pause)
+
         if self.card_exhale_pause.remove_btn is not None:
-            self.card_exhale_pause.remove_btn.clicked.connect(
-                lambda: self._stub("Remove exhale pause")
-            )
+            self.card_exhale_pause.remove_btn.clicked.connect(self._remove_exhale_pause)
 
         cards.addWidget(self.card_inhale, 0, 0)
         cards.addWidget(self.card_inhale_pause, 0, 1)
@@ -463,7 +596,7 @@ class BreathMetricsMainWindow(QMainWindow):
 
         self.table.selectRow(idx)
 
-        state = self._fake_breath_state(idx, len(self.breath_rows))
+        state = self._breath_state_from_bm(idx, len(self.breath_rows))
         self.canvas.plot_breath(state)
 
         self.card_inhale.set_value(state.inhale_t)
@@ -478,67 +611,123 @@ class BreathMetricsMainWindow(QMainWindow):
         self._select_breath(self.current_idx + 1)
 
     # ----------------------------
-    # Actions (placeholder)
+    # Actions
     # ----------------------------
 
     def _toggle_reject_current(self) -> None:
-        # BreathRow is frozen, so we replace the row (cleaner typing + immutable model)
-        row = self.breath_rows[self.current_idx]
-        new_status = "rejected" if row.status != "rejected" else "valid"
-        self.breath_rows[self.current_idx] = BreathRow(
-            breath_no=row.breath_no,
-            onset_s=row.onset_s,
-            offset_s=row.offset_s,
-            status=new_status,
-        )
-
-        item = self.table.item(self.current_idx, 3)
-        if item is not None:
-            item.setText(new_status)
-
-        self._select_breath(self.current_idx)
+        i = self.current_idx
+        self.editor.toggle_reject(i)
+        self._refresh_row(i)
+        self._select_breath(i)
 
     def _stub(self, msg: str) -> None:
         status_bar = self.statusBar()
         if status_bar is not None:
             status_bar.showMessage(f"{msg} (stub)", 2500)
 
+    def _undo_current_breath(self) -> None:
+        i = self.current_idx
+        self.editor.undo_breath(i)
+        self._refresh_row(i)
+        self._select_breath(i)
+
+    def _save_all_changes(self) -> None:
+        self.editor.commit()
+        self._stub("Committed edits (save-to-disk TODO)")
+
+    def _create_inhale_pause(self) -> None:
+        i = self.current_idx
+        target = int(round(float(self.bm.inhale_offsets[i])))  # default
+        self.editor.move_event(i, EventType.INHALE_PAUSE_ONSET, target)
+        self._select_breath(i)
+
+    def _remove_inhale_pause(self) -> None:
+        i = self.current_idx
+        # TODO: add BreathEditor.clear_event(...) for purity
+        self.bm.inhale_pause_onsets[i] = np.nan
+        # recompute inhale-dependent stuff:
+        self.editor.move_event(
+            i, EventType.INHALE_ONSET, int(round(float(self.bm.inhale_onsets[i])))
+        )
+        self._select_breath(i)
+
+    def _create_exhale_pause(self) -> None:
+        i = self.current_idx
+        target = int(round(float(self.bm.exhale_offsets[i])))  # default
+        self.editor.move_event(i, EventType.EXHALE_PAUSE_ONSET, target)
+        self._select_breath(i)
+
+    def _remove_exhale_pause(self) -> None:
+        i = self.current_idx
+        # TODO: add BreathEditor.clear_event(...) for purity
+        self.bm.exhale_pause_onsets[i] = np.nan
+        # recompute exhale-dependent stuff:
+        self.editor.move_event(
+            i, EventType.EXHALE_ONSET, int(round(float(self.bm.exhale_onsets[i])))
+        )
+        self._select_breath(i)
+
     # ----------------------------
-    # Fake data (so the GUI runs immediately)
+    # real BreathMetrics data extraction
     # ----------------------------
 
-    def _make_fake_rows(self, n: int) -> list[BreathRow]:
+    def _make_rows_from_bm(self) -> list[BreathRow]:
+        fs = float(self.bm.fs)
+        inhale_onsets = np.asarray(self.bm.inhale_onsets, dtype=float)
+        exhale_offsets = np.asarray(self.bm.exhale_offsets, dtype=float)
+
+        # is_valid stored/attached by BreathEditor; default valid if missing
+        is_valid = getattr(self.bm, "is_valid", None)
+        if is_valid is None:
+            is_valid = np.ones_like(inhale_onsets, dtype=bool)
+        else:
+            is_valid = np.asarray(is_valid, dtype=bool)
+
+        n = inhale_onsets.shape[0]
         rows: list[BreathRow] = []
-        onset = 1.563
         for i in range(n):
-            dur = 4.6 + 0.6 * float(np.sin(i / 8.0))
-            offset = onset + dur
+            onset_s = float(inhale_onsets[i]) / fs
+            offset_s = float(exhale_offsets[i]) / fs
+            status = "valid" if bool(is_valid[i]) else "rejected"
             rows.append(
                 BreathRow(
-                    breath_no=i + 1, onset_s=onset, offset_s=offset, status="valid"
+                    breath_no=i + 1, onset_s=onset_s, offset_s=offset_s, status=status
                 )
             )
-            onset = offset + (0.4 + 0.2 * float(np.cos(i / 6.0)))
         return rows
 
-    def _fake_breath_state(self, idx: int, n: int) -> BreathViewState:
-        t: FloatArray = np.linspace(0.0, 9.0, 900, dtype=np.float64)
-        y: FloatArray = (
-            0.045 * np.exp(-0.5 * ((t - 3.3) / 0.85) ** 2)
-            - 0.070 * np.exp(-0.5 * ((t - 5.0) / 0.55) ** 2)
-            + 0.004 * np.sin(2 * np.pi * t * 1.3)
-        ).astype(np.float64)
+    def _breath_state_from_bm(self, idx: int, n: int) -> BreathViewState:
+        fs = float(self.bm.fs)
 
-        # mimic screenshot example values
-        inhale_t: float = 1.563
-        inhale_pause_t: float = np.nan
-        exhale_t: float = 4.047
-        exhale_pause_t: float = 6.192
+        # breath window definition per your spec:
+        start = int(round(float(self.bm.inhale_onsets[idx])))
+        end = int(round(float(self.bm.exhale_offsets[idx])))
 
-        shift = 0.05 * float(np.sin(idx / 10.0))
-        y = (y + shift).astype(np.float64)
+        y_all = np.asarray(self.bm.bsl_corrected_respiration, dtype=np.float64)
 
-        status = self.breath_rows[idx].status
+        # add padding for context
+        pad = int(round(1.0 * fs))
+        lo = max(0, start - pad)
+        hi = min(y_all.shape[0] - 1, end + pad)
+
+        # PLOT X-AXIS CONVENTION:
+        # Here, we plot in *absolute seconds* to make editing conversions easy.
+        t = (np.arange(lo, hi + 1, dtype=np.float64) / fs).astype(np.float64)
+        y = y_all[lo : hi + 1].astype(np.float64)
+
+        # markers also in absolute seconds
+        def s_to_sec(samp_arr, i) -> float:
+            return float(samp_arr[i]) / fs
+
+        inhale_t = s_to_sec(self.bm.inhale_onsets, idx)
+        exhale_t = s_to_sec(self.bm.exhale_onsets, idx)
+        inhale_pause_t = s_to_sec(self.bm.inhale_pause_onsets, idx)
+        exhale_pause_t = s_to_sec(self.bm.exhale_pause_onsets, idx)
+
+        is_valid = getattr(self.bm, "is_valid", None)
+        status = "valid"
+        if is_valid is not None and not bool(np.asarray(is_valid, dtype=bool)[idx]):
+            status = "rejected"
 
         return BreathViewState(
             breath_index=idx,
@@ -553,12 +742,25 @@ class BreathMetricsMainWindow(QMainWindow):
         )
 
 
-def main() -> None:
+def main(bm_obj: Optional[Any] = None) -> None:
+    _validate_bm_obj(bm_obj)
+
     app = QApplication(sys.argv)
-    win = BreathMetricsMainWindow()
+    win = BreathMetricsMainWindow(bm_obj)
     win.show()
     sys.exit(app.exec())
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(
+        "The GUI expects an existing `bm_obj` (notebook-style usage).\n\n"
+        "Example (in a notebook):\n"
+        "  from breathmetrics_gui import main\n"
+        "  main(bm_obj)\n\n"
+        "Or:\n"
+        "  from breathmetrics_gui import BreathMetricsMainWindow\n"
+        "  app = QApplication([])\n"
+        "  win = BreathMetricsMainWindow(bm_obj)\n"
+        "  win.show()\n"
+        "  app.exec()\n"
+    )
