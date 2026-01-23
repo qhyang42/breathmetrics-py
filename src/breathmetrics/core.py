@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 # import breathmetrics.kernel
 # import breathmetrics.kernel_onset_detection_methods
-import breathmetrics.kernel
+import breathmetrics.kernel_primary
 import breathmetrics.kernel_onset_detection_methods
 import breathmetrics.utils
 
@@ -119,7 +119,7 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
 
     def correct_resp_to_baseline(self):
         self.bsl_corrected_respiration = (
-            breathmetrics.kernel.correct_respiration_to_baseline(
+            breathmetrics.kernel_primary.correct_respiration_to_baseline(
                 self.smoothed_respiration, self.srate
             )
         )
@@ -127,7 +127,7 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
     ## feature extraction
     def find_extrema(self):
         self.inhale_peaks, self.exhale_troughs = (
-            breathmetrics.kernel.find_respiratory_extrema(
+            breathmetrics.kernel_primary.find_respiratory_extrema(
                 self.bsl_corrected_respiration, self.srate
             )
         )
@@ -162,7 +162,7 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
 
     def find_time2peaktrough(self):
         self.inhale_time2peak, self.exhale_time2trough = (
-            breathmetrics.kernel.find_time_to_peak_trough(
+            breathmetrics.kernel_primary.find_time_to_peak_trough(
                 self.inhale_onsets,
                 self.inhale_peaks,
                 self.exhale_onsets,
@@ -173,7 +173,7 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
 
     def find_respiratory_offsets(self):
         (self.inhale_offsets, self.exhale_offsets) = (
-            breathmetrics.kernel.find_respiratory_offsets(
+            breathmetrics.kernel_primary.find_respiratory_offsets(
                 self.bsl_corrected_respiration,
                 self.inhale_onsets,
                 self.exhale_onsets,
@@ -188,7 +188,7 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
             self.exhale_durations,
             self.inhale_pause_durations,
             self.exhale_pause_durations,
-        ) = breathmetrics.kernel.find_respiratory_durations(
+        ) = breathmetrics.kernel_primary.find_respiratory_durations(
             self.inhale_onsets,
             self.inhale_offsets,
             self.exhale_onsets,
@@ -200,7 +200,7 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
 
     def find_resp_volume(self):
         self.inhale_volumes, self.exhale_volumes = (
-            breathmetrics.kernel.find_respiratory_volume(
+            breathmetrics.kernel_primary.find_respiratory_volume(
                 self.bsl_corrected_respiration,
                 self.inhale_onsets,
                 self.inhale_offsets,
@@ -335,9 +335,52 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
     if verbose:
         print("BreathMetrics: done.")
 
-    def inspect(self):  # place holder for GUI
-        # from breathmetrics import breathmetrics_gui
-        return None
+    def inspect(self) -> None:
+        """
+        Launch the BreathMetrics inspection / editing GUI for this object.
+
+        Notes
+        -----
+        - Expects all primary breathing features to be estimated already.
+        - Intended for notebook / interactive usage.
+        """
+
+        # --- lightweight validation ---
+        required_attrs = (
+            "fs",
+            "bsl_corrected_respiration",
+            "inhale_onsets",
+            "exhale_onsets",
+            "exhale_offsets",
+            "inhale_pause_onsets",
+            "exhale_pause_onsets",
+        )
+
+        missing = [a for a in required_attrs if not hasattr(self, a)]
+        if missing:
+            raise RuntimeError(
+                "BreathMetrics.inspect() cannot launch the GUI because required "
+                f"features are missing: {missing}\n\n"
+                "Did you forget to run estimate_all_features()?"
+            )
+
+        # --- import here to avoid hard GUI dependency on core ---
+        from PyQt6.QtWidgets import QApplication
+        from breathmetrics.breathmetrics_gui import BreathMetricsMainWindow
+
+        app = QApplication.instance()
+        owns_app = False
+
+        if app is None:
+            app = QApplication([])
+            owns_app = True
+
+        win = BreathMetricsMainWindow(self)
+        win.show()
+
+        # In scripts, block; in notebooks, let Qt event loop live
+        if owns_app:
+            app.exec()
 
     def behold(self):
         """Alias for inspect()."""

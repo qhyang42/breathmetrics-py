@@ -3,7 +3,7 @@
 import numpy as np
 import pandas as pd
 
-from breathmetrics.kernel import (
+from breathmetrics.kernel_primary import (
     correct_respiration_to_baseline,
     find_respiratory_extrema,
     find_respiratory_volume,
