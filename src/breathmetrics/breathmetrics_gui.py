@@ -742,18 +742,18 @@ class BreathMetricsMainWindow(QMainWindow):
         )
 
 
-def main(bm_obj: Optional[Any] = None) -> None:
+def main(bm_obj: Optional[Any] = None) -> int:
     _validate_bm_obj(bm_obj)
 
     app = QApplication(sys.argv)
     win = BreathMetricsMainWindow(bm_obj)
     win.show()
-    sys.exit(app.exec())
+    return app.exec()
 
 
 if __name__ == "__main__":
     raise SystemExit(
-        "The GUI expects an existing `bm_obj` (notebook-style usage).\n\n"
+        "The GUI expects an existing breathmetrics object (notebook-style usage).\n\n"
         "Example (in a notebook):\n"
         "  from breathmetrics_gui import main\n"
         "  main(bm_obj)\n\n"

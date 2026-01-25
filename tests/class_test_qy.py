@@ -36,4 +36,10 @@ print(
 bmobj.estimate_all_features(verbose=True, compute_secondary=False)
 print("complete:", bmobj.feature_estimations_complete)
 
-# %% plotting
+# %% GUI launch test
+bmobj.inspect()
+
+# %% alias
+bmobj.behold()
+
+# %%

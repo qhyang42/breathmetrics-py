@@ -344,10 +344,11 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
         - Expects all primary breathing features to be estimated already.
         - Intended for notebook / interactive usage.
         """
+        self._ensure_qt_event_loop()
 
         # --- lightweight validation ---
         required_attrs = (
-            "fs",
+            "srate",
             "bsl_corrected_respiration",
             "inhale_onsets",
             "exhale_onsets",
@@ -369,23 +370,47 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
         from breathmetrics.breathmetrics_gui import BreathMetricsMainWindow
 
         app = QApplication.instance()
-        owns_app = False
 
         if app is None:
             app = QApplication([])
-            owns_app = True
 
         win = BreathMetricsMainWindow(self)
+        self._inspect_window = win  # type: ignore[attr-defined]
+
         win.show()
 
-        # In scripts, block; in notebooks, let Qt event loop live
-        if owns_app:
-            app.exec()
+    def behold(self) -> None:
+        """Alias for inspect(), with a tiny flourish. Thank you for using BreathMetrics!"""
+        try:
+            from IPython.core.getipython import get_ipython
 
-    def behold(self):
-        """Alias for inspect()."""
+            in_ipython = get_ipython() is not None
+        except Exception:
+            in_ipython = False
+
         import sys
 
-        if sys.stdout.isatty():
-            print("Tada! ✨")
-        return self.inspect()
+        if in_ipython or sys.stdout.isatty():
+            print("Tada! 👀✨")
+
+        self.inspect()
+
+    # internal. for ipython qt event loop integration
+    def _ensure_qt_event_loop(self) -> None:
+        """
+        Try to enable Qt event loop integration when running inside IPython.
+        Safe no-op in non-IPython contexts.
+        """
+        try:
+            from IPython.core.getipython import get_ipython
+
+            ip = get_ipython()
+            if ip is None:
+                return
+
+            # Only run if GUI integration isn't already active
+            # (running it twice is usually harmless, but be polite)
+            ip.run_line_magic("gui", "qt6")
+        except Exception:
+            # Never let GUI setup crash the user's session
+            pass
