@@ -5,11 +5,7 @@ import numpy as np
 
 # import matplotlib.pyplot as plt
 import pandas as pd
-
 import breathmetrics
-
-# from breathmetrics.core import bm  # or wherever bm lives
-
 
 # %% load data
 data = pd.read_csv("../data/resp_1.csv")

@@ -12,6 +12,18 @@
 12/12/2025 start working on new onset detection method. waiting for Adam to finish matlab version. 
 1/12/2026 add new onset detection method from Adam. Not tested. 
 1/14/2026 all primary feature debug complete. (they run at least)
+1/24/2026 primary workflow complete. 
+
+  TODOs as of 1/24/2026: 
+  1. GUI edit methods linking not tested. 
+  2. GUI fine tuning (arrow keys etc.)
+  3. test/integrate secondary features 
+  4. plotting code. (never tested with real data. maybe change some of them?). Add method to pull pretty summary plot? 
+  5. CLI (for terminal/HPC something like `breathmetrics estimate resp.csv --fs 1000 --datatype humanAirflow`). 
+
+
+
+
 # pipeline from orig breathmetrics toolbox: 
 ## preproc
 check input. i can take numpy array, CSV, .mat file. reshape to single vector 

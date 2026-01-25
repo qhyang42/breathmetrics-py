@@ -76,7 +76,7 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
     # ERPtrialEventInds
     # ERPrejectedEventInds
 
-    statuses: None
+    is_valid: np.ndarray | None
     # notes
 
     feature_estimations_complete: bool
@@ -92,6 +92,7 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
 
         self.feature_estimations_complete = False
         self.features_manually_edited = False
+        self.is_valid = None
 
         # get smooth window
         if self.datatype == "humanAirflow":
@@ -232,16 +233,16 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
         """
 
         from breathmetrics.kernel_secondary import (
-            get_valid_breath_indices,
             compute_breath_timing_metrics,
             compute_airflow_metrics,
             compute_duty_cycle_metrics,
             assemble_respiratory_summary,
         )
+        from breathmetrics.utils import get_valid_breath_indices
 
         # 1. Identify valid breaths
         valid_inhales, valid_exhales = get_valid_breath_indices(
-            self.statuses, len(self.inhale_onsets), len(self.exhale_onsets)
+            self.is_valid, len(self.inhale_onsets), len(self.exhale_onsets)
         )
 
         # 2. Compute breathing rate, IBI, variability
@@ -315,6 +316,7 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
         self.find_pause_slope()
 
         self.find_respiratory_offsets()
+        self.is_valid = np.ones(len(self.inhale_onsets), dtype=bool)
 
         # 4) Durations
         self.find_resp_durations()
@@ -391,11 +393,13 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
         import sys
 
         if in_ipython or sys.stdout.isatty():
-            print("Tada! 👀✨")
+            print("Tada! 👀✨\nThank you for using BreathMetrics!")
 
         self.inspect()
 
-    # internal. for ipython qt event loop integration
+    # ----------
+    # Internal. For ipython qt event loop integration 🦊🤖
+    # ----------
     def _ensure_qt_event_loop(self) -> None:
         """
         Try to enable Qt event loop integration when running inside IPython.

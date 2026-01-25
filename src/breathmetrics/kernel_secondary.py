@@ -12,20 +12,6 @@ import numpy as np
 # mean inhale/exhale rate/volumes, tidal volumes, minute ventilations, duty cycle
 
 
-def get_valid_breath_indices(statuses, n_inhales: int, n_exhales: int):
-    """Return arrays of valid inhale/exhale indices based on rejection statuses."""
-    if statuses is None or len(statuses) == 0:
-        return np.arange(n_inhales), np.arange(n_exhales)
-
-    invalid = np.array(
-        [i for i, s in enumerate(statuses) if "rejected" in str(s).lower()]
-    )
-    valid_inhales = np.setdiff1d(np.arange(n_inhales), invalid)
-    valid_exhales = np.setdiff1d(np.arange(n_exhales), invalid)
-
-    return valid_inhales, valid_exhales
-
-
 def compute_breath_timing_metrics(inhale_onsets, valid_inhales, srate: float):
     """Compute breathing rate, inter-breath interval, and coefficient of variation."""
     diffs = [

@@ -45,6 +45,29 @@ def fft_smooth(x: np.ndarray, win: int) -> np.ndarray:
     return y[start : start + x.size]
 
 
+def get_valid_breath_indices(is_valid, n_inhales: int, n_exhales: int):
+    """Return arrays of valid inhale/exhale indices based on is_valid flags."""
+    if is_valid is None or len(is_valid) == 0:
+        return np.arange(n_inhales), np.arange(n_exhales)
+
+    valid_mask = np.asarray(is_valid, dtype=bool)
+    n = min(valid_mask.shape[0], n_inhales, n_exhales)
+    if n == 0:
+        return np.arange(n_inhales), np.arange(n_exhales)
+
+    valid_idx = np.flatnonzero(valid_mask[:n])
+    if n_inhales > n:
+        valid_inhales = np.concatenate([valid_idx, np.arange(n, n_inhales)])
+    else:
+        valid_inhales = valid_idx
+    if n_exhales > n:
+        valid_exhales = np.concatenate([valid_idx, np.arange(n, n_exhales)])
+    else:
+        valid_exhales = valid_idx
+
+    return valid_inhales, valid_exhales
+
+
 def zscore(x: np.ndarray, eps: float = 1e-9) -> np.ndarray:
     x = x.astype(float)
     return (x - x.mean()) / (x.std() + eps)

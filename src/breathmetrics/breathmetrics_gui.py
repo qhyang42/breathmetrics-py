@@ -10,6 +10,7 @@ python breathmetrics_gui.py
 from __future__ import annotations
 
 import sys
+import copy
 from dataclasses import dataclass
 from typing import Optional, Callable, Any
 
@@ -26,6 +27,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QSizePolicy,
     QSplitter,
@@ -44,6 +46,7 @@ from breathmetrics.breath_editor import BreathEditor, EventType
 
 
 FloatArray = NDArray[np.float64]
+bm_backup: Any | None = None
 
 # load and verify object
 _REQUIRED_ATTRS = (
@@ -123,6 +126,8 @@ class BreathPlotCanvas(FigureCanvas):
         self._dragging: Optional[EventType] = None
         self._marker_xs: dict[EventType, float] = {}
         self._pick_radius_s: float = 0.15  # seconds (tune)
+        self._last_t: Optional[FloatArray] = None
+        self._last_y: Optional[FloatArray] = None
 
         # callback set by MainWindow:
         self.on_move_requested: Optional[Callable[[EventType, float], None]] = None
@@ -151,6 +156,8 @@ class BreathPlotCanvas(FigureCanvas):
 
         t = state.t
         y = state.y
+        self._last_t = t
+        self._last_y = y
         self.ax.plot(t, y, linewidth=2)
 
         def y_at(x: Optional[float]) -> Optional[float]:
@@ -194,6 +201,76 @@ class BreathPlotCanvas(FigureCanvas):
         self.ax.set_title(
             f"Breath {state.breath_index + 1}/{state.n_breaths} ({state.status})"
         )
+        self.draw_idle()
+
+    def update_markers(
+        self, state: BreathViewState, *, keep_window: bool = True
+    ) -> None:
+        if keep_window and self._last_t is not None and self._last_y is not None:
+            xlim = self.ax.get_xlim()
+            ylim = self.ax.get_ylim()
+            t = self._last_t
+            y = self._last_y
+        else:
+            t = state.t
+            y = state.y
+            xlim = None
+            ylim = None
+
+        if t is None or y is None:
+            self.plot_breath(state)
+            return
+
+        self.ax.clear()
+        self.ax.grid(True, alpha=0.25)
+        self.ax.set_xlabel("Time (S)")
+        self.ax.set_ylabel("Amplitude")
+        self.ax.plot(t, y, linewidth=2)
+
+        def y_at(x: Optional[float]) -> Optional[float]:
+            if x is None:
+                return None
+            idx = int(np.argmin(np.abs(t - x)))
+            return float(y[idx])
+
+        def mark(
+            x: Optional[float], yv: Optional[float], label: str, color: str
+        ) -> None:
+            if x is None or yv is None:
+                return
+            self.ax.scatter(
+                [x],
+                [yv],
+                s=60,
+                zorder=3,
+                color=color,
+                edgecolor="black",
+                linewidth=0.8,
+            )
+            if label:
+                self.ax.text(x, yv, f" {label}", va="center", fontsize=10)
+
+        mark(state.inhale_t, y_at(state.inhale_t), "", "#2f77ff")
+        mark(state.inhale_pause_t, y_at(state.inhale_pause_t), "", "#12b8b0")
+        mark(state.exhale_t, y_at(state.exhale_t), "", "#c9bf2a")
+        mark(state.exhale_pause_t, y_at(state.exhale_pause_t), "Next Inhale", "black")
+
+        self._marker_xs = {}
+        if state.inhale_t is not None and np.isfinite(state.inhale_t):
+            self._marker_xs[EventType.INHALE_ONSET] = float(state.inhale_t)
+        if state.exhale_t is not None and np.isfinite(state.exhale_t):
+            self._marker_xs[EventType.EXHALE_ONSET] = float(state.exhale_t)
+        if state.inhale_pause_t is not None and np.isfinite(state.inhale_pause_t):
+            self._marker_xs[EventType.INHALE_PAUSE_ONSET] = float(state.inhale_pause_t)
+        if state.exhale_pause_t is not None and np.isfinite(state.exhale_pause_t):
+            self._marker_xs[EventType.EXHALE_PAUSE_ONSET] = float(state.exhale_pause_t)
+
+        self.ax.set_title(
+            f"Breath {state.breath_index + 1}/{state.n_breaths} ({state.status})"
+        )
+        if keep_window and xlim is not None and ylim is not None:
+            self.ax.set_xlim(xlim)
+            self.ax.set_ylim(ylim)
         self.draw_idle()
 
     # --- interactive dragging methods ---
@@ -312,6 +389,8 @@ class BreathMetricsMainWindow(QMainWindow):
         self.resize(1500, 800)
 
         self.bm = bm_obj
+        global bm_backup
+        bm_backup = copy.deepcopy(bm_obj)
         self.editor = BreathEditor(self.bm)
 
         self.current_idx: int = 0
@@ -412,6 +491,17 @@ class BreathMetricsMainWindow(QMainWindow):
             """
         )
 
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_Left:
+            self._prev_breath()
+            event.accept()
+            return
+        if event.key() == Qt.Key.Key_Right:
+            self._next_breath()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
     def _handle_move_requested(self, event: EventType, x_seconds: float) -> None:
         """
         Called by canvas while dragging.
@@ -427,8 +517,13 @@ class BreathMetricsMainWindow(QMainWindow):
         if event == EventType.INHALE_ONSET:
             self._refresh_row(i)
 
-        # Redraw
-        self._select_breath(i)
+        # Redraw markers without changing the current view window
+        state = self._breath_state_from_bm(i, len(self.breath_rows))
+        self.canvas.update_markers(state, keep_window=True)
+        self.card_inhale.set_value(state.inhale_t)
+        self.card_inhale_pause.set_value(state.inhale_pause_t)
+        self.card_exhale.set_value(state.exhale_t)
+        self.card_exhale_pause.set_value(state.exhale_pause_t)
 
         # Optional status feedback
         if res.was_clamped:
@@ -500,18 +595,18 @@ class BreathMetricsMainWindow(QMainWindow):
         self.add_note_btn = QPushButton("Add Note To This Breath")
         self.reject_btn = QPushButton("Reject This Breath")
         self.undo_btn = QPushButton("Undo Changes To This Breath")
-        self.save_all_btn = QPushButton("SAVE ALL CHANGES")
+        self.cancel_btn = QPushButton("Cancel")
 
         self.add_note_btn.clicked.connect(lambda: self._stub("Add note"))
         self.reject_btn.clicked.connect(self._toggle_reject_current)
         self.undo_btn.clicked.connect(self._undo_current_breath)
-        self.save_all_btn.clicked.connect(self._save_all_changes)
+        self.cancel_btn.clicked.connect(self._cancel_and_discard)
 
         gl.addWidget(self.add_note_btn)
         gl.addWidget(self.reject_btn)
         gl.addWidget(self.undo_btn)
         gl.addSpacing(6)
-        gl.addWidget(self.save_all_btn)
+        gl.addWidget(self.cancel_btn)
 
         layout.addWidget(group)
         return panel
@@ -631,9 +726,25 @@ class BreathMetricsMainWindow(QMainWindow):
         self._refresh_row(i)
         self._select_breath(i)
 
-    def _save_all_changes(self) -> None:
-        self.editor.commit()
-        self._stub("Committed edits (save-to-disk TODO)")
+    def _cancel_and_discard(self) -> None:
+        resp = QMessageBox.question(
+            self,
+            "Discard Changes?",
+            "Close and discard all changes?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if resp != QMessageBox.StandardButton.Yes:
+            return
+        if bm_backup is not None:
+            self._restore_from_backup()
+        self.close()
+
+    def _restore_from_backup(self) -> None:
+        if bm_backup is None:
+            return
+        self.bm.__dict__.clear()
+        self.bm.__dict__.update(copy.deepcopy(bm_backup.__dict__))
 
     def _create_inhale_pause(self) -> None:
         i = self.current_idx
