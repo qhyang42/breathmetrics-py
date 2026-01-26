@@ -18,7 +18,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QKeyEvent
 from PyQt6.QtWidgets import (
     QApplication,
     QFrame,
@@ -58,6 +58,11 @@ _REQUIRED_ATTRS = (
     "inhale_pause_onsets",
     "exhale_pause_onsets",
 )
+
+_COLOR_INHALE = "#2f77ff"
+_COLOR_INHALE_PAUSE = "#12b8b0"
+_COLOR_EXHALE = "#c9bf2a"
+_COLOR_EXHALE_PAUSE = "#f1f000"
 
 
 def _validate_bm_obj(bm_obj: Any) -> None:
@@ -169,7 +174,7 @@ class BreathPlotCanvas(FigureCanvas):
         def mark(
             x: Optional[float], yv: Optional[float], label: str, color: str
         ) -> None:
-            if x is None or yv is None:
+            if x is None or yv is None or not np.isfinite(x):
                 return
             self.ax.scatter(
                 [x],
@@ -183,10 +188,10 @@ class BreathPlotCanvas(FigureCanvas):
             if label:
                 self.ax.text(x, yv, f" {label}", va="center", fontsize=10)
 
-        mark(state.inhale_t, y_at(state.inhale_t), "", "#2f77ff")
-        mark(state.inhale_pause_t, y_at(state.inhale_pause_t), "", "#12b8b0")
-        mark(state.exhale_t, y_at(state.exhale_t), "", "#c9bf2a")
-        mark(state.exhale_pause_t, y_at(state.exhale_pause_t), "Next Inhale", "black")
+        mark(state.inhale_t, y_at(state.inhale_t), "", _COLOR_INHALE)
+        mark(state.inhale_pause_t, y_at(state.inhale_pause_t), "", _COLOR_INHALE_PAUSE)
+        mark(state.exhale_t, y_at(state.exhale_t), "", _COLOR_EXHALE)
+        mark(state.exhale_pause_t, y_at(state.exhale_pause_t), "", _COLOR_EXHALE_PAUSE)
         # --- store marker x positions for hit testing ---
         self._marker_xs = {}
         if state.inhale_t is not None and np.isfinite(state.inhale_t):
@@ -236,7 +241,7 @@ class BreathPlotCanvas(FigureCanvas):
         def mark(
             x: Optional[float], yv: Optional[float], label: str, color: str
         ) -> None:
-            if x is None or yv is None:
+            if x is None or yv is None or not np.isfinite(x):
                 return
             self.ax.scatter(
                 [x],
@@ -250,10 +255,10 @@ class BreathPlotCanvas(FigureCanvas):
             if label:
                 self.ax.text(x, yv, f" {label}", va="center", fontsize=10)
 
-        mark(state.inhale_t, y_at(state.inhale_t), "", "#2f77ff")
-        mark(state.inhale_pause_t, y_at(state.inhale_pause_t), "", "#12b8b0")
-        mark(state.exhale_t, y_at(state.exhale_t), "", "#c9bf2a")
-        mark(state.exhale_pause_t, y_at(state.exhale_pause_t), "Next Inhale", "black")
+        mark(state.inhale_t, y_at(state.inhale_t), "", _COLOR_INHALE)
+        mark(state.inhale_pause_t, y_at(state.inhale_pause_t), "", _COLOR_INHALE_PAUSE)
+        mark(state.exhale_t, y_at(state.exhale_t), "", _COLOR_EXHALE)
+        mark(state.exhale_pause_t, y_at(state.exhale_pause_t), "", _COLOR_EXHALE_PAUSE)
 
         self._marker_xs = {}
         if state.inhale_t is not None and np.isfinite(state.inhale_t):
@@ -491,16 +496,19 @@ class BreathMetricsMainWindow(QMainWindow):
             """
         )
 
-    def keyPressEvent(self, event) -> None:
-        if event.key() == Qt.Key.Key_Left:
+    def keyPressEvent(self, a0: Optional[QKeyEvent]) -> None:
+        if a0 is None:
+            super().keyPressEvent(a0)
+            return
+        if a0.key() == Qt.Key.Key_Left:
             self._prev_breath()
-            event.accept()
+            a0.accept()
             return
-        if event.key() == Qt.Key.Key_Right:
+        if a0.key() == Qt.Key.Key_Right:
             self._next_breath()
-            event.accept()
+            a0.accept()
             return
-        super().keyPressEvent(event)
+        super().keyPressEvent(a0)
 
     def _handle_move_requested(self, event: EventType, x_seconds: float) -> None:
         """
@@ -513,9 +521,8 @@ class BreathMetricsMainWindow(QMainWindow):
 
         res = self.editor.move_event(i, event, new_sample)
 
-        # Update table onset/offset if inhale onset changed (optional but nice)
-        if event == EventType.INHALE_ONSET:
-            self._refresh_row(i)
+        # Update table onset/offset/status for consistency across edits
+        self._refresh_row(i)
 
         # Redraw markers without changing the current view window
         state = self._breath_state_from_bm(i, len(self.breath_rows))
@@ -630,13 +637,13 @@ class BreathMetricsMainWindow(QMainWindow):
         cards.setHorizontalSpacing(24)
         cards.setVerticalSpacing(10)
 
-        self.card_inhale = FeatureCard("Inhale", "#2f77ff", show_controls=False)
+        self.card_inhale = FeatureCard("Inhale", _COLOR_INHALE, show_controls=False)
         self.card_inhale_pause = FeatureCard(
-            "Inhale Pause", "#12b8b0", show_controls=True
+            "Inhale Pause", _COLOR_INHALE_PAUSE, show_controls=True
         )
-        self.card_exhale = FeatureCard("Exhale", "#c9bf2a", show_controls=False)
+        self.card_exhale = FeatureCard("Exhale", _COLOR_EXHALE, show_controls=False)
         self.card_exhale_pause = FeatureCard(
-            "Exhale Pause", "#f1f000", show_controls=True
+            "Exhale Pause", _COLOR_EXHALE_PAUSE, show_controls=True
         )
 
         if self.card_inhale_pause.create_btn is not None:
@@ -748,7 +755,8 @@ class BreathMetricsMainWindow(QMainWindow):
 
     def _create_inhale_pause(self) -> None:
         i = self.current_idx
-        target = int(round(float(self.bm.inhale_offsets[i])))  # default
+        fs = float(self.bm.srate)
+        target = int(round(float(self.bm.exhale_onsets[i]) - (0.5 * fs)))
         self.editor.move_event(i, EventType.INHALE_PAUSE_ONSET, target)
         self._select_breath(i)
 
@@ -764,7 +772,8 @@ class BreathMetricsMainWindow(QMainWindow):
 
     def _create_exhale_pause(self) -> None:
         i = self.current_idx
-        target = int(round(float(self.bm.exhale_offsets[i])))  # default
+        fs = float(self.bm.srate)
+        target = int(round(float(self.bm.exhale_offsets[i]) - (0.5 * fs)))
         self.editor.move_event(i, EventType.EXHALE_PAUSE_ONSET, target)
         self._select_breath(i)
 

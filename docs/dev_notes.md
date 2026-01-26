@@ -16,11 +16,13 @@
 
   TODOs as of 1/24/2026: 
   1. GUI edit methods linking not tested. 
-  2. GUI fine tuning (arrow keys etc.)
+        Done. 
+  2. GUI fine tuning 
+      ADD pause dots to the plot 
+
   3. test/integrate secondary features 
   4. plotting code. (never tested with real data. maybe change some of them?). Add method to pull pretty summary plot? 
   5. CLI (for terminal/HPC something like `breathmetrics estimate resp.csv --fs 1000 --datatype humanAirflow`). 
-
 
 
 

@@ -324,11 +324,13 @@ class BreathEditor:
         Returns allowable [lo, hi] for each editable event given current model state.
 
         Constraints enforced (no scrambling):
-        inhale_onset < inhale_peak <= inhale_end < exhale_onset <= exhale_trough < exhale_end
+        inhale_onset < inhale_peak < exhale_onset < exhale_trough < next_inhale_onset
 
-        Where inhale_end/exhale_end are "effective" offsets (pause onset if present).
+        Pause rules:
+        - inhale_pause_onset between inhale_onset and exhale_onset
+        - exhale_pause_onset between exhale_trough and next_inhale_onset
         """
-        # inhale_onsets = _as_float_array(getattr(self.bm, "inhale_onsets")) # unused
+        inhale_onsets = _as_float_array(getattr(self.bm, "inhale_onsets"))
         exhale_onsets = _as_float_array(getattr(self.bm, "exhale_onsets"))
         inhale_peaks = _as_float_array(getattr(self.bm, "inhale_peaks"))
         exhale_troughs = _as_float_array(getattr(self.bm, "exhale_troughs"))
@@ -336,22 +338,31 @@ class BreathEditor:
         sig_lo, sig_hi = self._signal_bounds()
         neigh_lo, neigh_hi = self._breath_neighbor_bounds(i)
 
-        inhale_end, exhale_end = self._phase_effective_offsets(i)
-
         inhale_peak = (
-            _safe_int(inhale_peaks[i]) if _finite(inhale_peaks[i]) else inhale_end
+            _safe_int(inhale_peaks[i])
+            if _finite(inhale_peaks[i])
+            else _safe_int(inhale_onsets[i])
         )
         exhale_trough = (
-            _safe_int(exhale_troughs[i]) if _finite(exhale_troughs[i]) else exhale_end
+            _safe_int(exhale_troughs[i])
+            if _finite(exhale_troughs[i])
+            else _safe_int(exhale_onsets[i])
         )
 
-        # current exhale onset might be NaN; treat as inhale_end+1 minimum
+        # current exhale onset might be NaN; treat as inhale_peak+1 minimum
         cur_exhale_onset = exhale_onsets[i]
-        exhale_onset_min = inhale_end + 1
+        exhale_onset_min = inhale_peak + 1
         exhale_onset = (
             _safe_int(cur_exhale_onset)
             if _finite(cur_exhale_onset)
             else exhale_onset_min
+        )
+
+        # next inhale onset bound if present
+        next_inhale_onset = (
+            _safe_int(inhale_onsets[i + 1])
+            if (i + 1) < inhale_onsets.shape[0] and _finite(inhale_onsets[i + 1])
+            else sig_hi
         )
 
         # inhale onset bounds: after previous breath end, before inhale_peak-1
@@ -360,22 +371,22 @@ class BreathEditor:
             sig_hi,
             neigh_hi,
             inhale_peak - 1,
-            inhale_end - 1,
             exhale_onset - 1,
-            exhale_end - 1,
+            exhale_trough - 1,
+            next_inhale_onset - 1,
         )
 
-        # exhale onset bounds: after inhale_end+1, before exhale_trough-1
-        lo_exh_on = max(sig_lo, inhale_end + 1)
-        hi_exh_on = min(sig_hi, exhale_trough - 1, exhale_end - 1)
+        # exhale onset bounds: after inhale_peak+1, before exhale_trough-1
+        lo_exh_on = max(sig_lo, inhale_peak + 1)
+        hi_exh_on = min(sig_hi, exhale_trough - 1, next_inhale_onset - 1)
 
-        # inhale pause onset bounds: after inhale_peak, before exhale_onset-1 (pause starts at inhale end)
-        lo_inh_pause = max(sig_lo, inhale_peak)
-        hi_inh_pause = min(sig_hi, exhale_onset - 1, exhale_end - 2)
+        # inhale pause onset bounds: between inhale_onset and exhale_onset
+        lo_inh_pause = max(sig_lo, _safe_int(inhale_onsets[i]) + 1)
+        hi_inh_pause = min(sig_hi, exhale_onset - 1)
 
-        # exhale pause onset bounds: after exhale_trough, before exhale_end
-        lo_exh_pause = max(sig_lo, exhale_trough)
-        hi_exh_pause = min(sig_hi, exhale_end)
+        # exhale pause onset bounds: between exhale_trough and next inhale onset
+        lo_exh_pause = max(sig_lo, exhale_trough + 1)
+        hi_exh_pause = min(sig_hi, next_inhale_onset - 1)
 
         # clamp any inverted bounds to something safe (so we "clamp to nearest available point")
         def safe_bounds(lo: int, hi: int) -> tuple[int, int]:

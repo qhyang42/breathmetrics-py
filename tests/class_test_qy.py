@@ -3,9 +3,10 @@
 # %%
 import numpy as np
 
-# import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt
 import pandas as pd
 import breathmetrics
+
 
 # %% load data
 data = pd.read_csv("../data/resp_1.csv")
@@ -37,5 +38,13 @@ bmobj.inspect()
 
 # %% alias
 bmobj.behold()
+
+# %% trough troubleshooting
+plt.plot(bmobj.smoothed_respiration[0:20000])
+plt.plot(
+    bmobj.exhale_onsets[0:4],
+    bmobj.smoothed_respiration[bmobj.exhale_onsets[0:4].astype(int)],
+    "ro",
+)
 
 # %%
