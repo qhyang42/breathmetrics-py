@@ -10,7 +10,6 @@ python breathmetrics_gui.py
 from __future__ import annotations
 
 import sys
-import copy
 from dataclasses import dataclass
 from typing import Optional, Callable, Any
 
@@ -47,7 +46,6 @@ from breathmetrics.utils import MISSING_EVENT
 
 
 FloatArray = NDArray[np.float64]
-bm_backup: Any | None = None
 
 # load and verify object
 _REQUIRED_ATTRS = (
@@ -428,19 +426,8 @@ class BreathMetricsMainWindow(QMainWindow):
         self.setWindowTitle("BreathMetrics GUI")
         self.resize(1500, 800)
 
-        ## avoid pickle error in second GUI launch in ipykernels.
-        ## THIS IS A REALLY HACKY FIX. Find better later.
-
         self.bm = bm_obj
-        # global bm_backup  # Not needed.
-        tmp_win = getattr(bm_obj, "_inspect_window", None)
-
-        if tmp_win is not None:
-            bm_obj._inspect_window = None
-        self._backup = copy.deepcopy(bm_obj)
-
-        if tmp_win is not None:
-            bm_obj._inspect_window = tmp_win
+        self._backup = self._make_backup()
         self.editor = BreathEditor(self.bm)
 
         self.current_idx: int = 0
@@ -799,8 +786,34 @@ class BreathMetricsMainWindow(QMainWindow):
     def _restore_from_backup(self) -> None:
         if self._backup is None:
             return
-        self.bm.__dict__.clear()
-        self.bm.__dict__.update(copy.deepcopy(self._backup.__dict__))
+        for k, v in self._backup.items():
+            setattr(self.bm, k, np.copy(v))
+
+    def _make_backup(self) -> dict[str, np.ndarray]:
+        keys = [
+            "inhale_peaks",
+            "exhale_troughs",
+            "inhale_onsets",
+            "exhale_onsets",
+            "inhale_offsets",
+            "exhale_offsets",
+            "inhale_pause_onsets",
+            "exhale_pause_onsets",
+            "inhale_time2peak",
+            "exhale_time2trough",
+            "inhale_durations",
+            "exhale_durations",
+            "inhale_volumes",
+            "exhale_volumes",
+            "inhale_pause_durations",
+            "exhale_pause_durations",
+            "is_valid",
+        ]
+        backup: dict[str, np.ndarray] = {}
+        for k in keys:
+            if hasattr(self.bm, k):
+                backup[k] = np.copy(getattr(self.bm, k))
+        return backup
 
     def _create_inhale_pause(self) -> None:
         i = self.current_idx
