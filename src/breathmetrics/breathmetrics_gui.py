@@ -41,6 +41,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
 from breathmetrics.breath_editor import BreathEditor, EventType
+from breathmetrics.utils import MISSING_EVENT
 
 # from breathmetrics.breath_editor import BreathEditor, EventType, EditResult
 
@@ -174,7 +175,7 @@ class BreathPlotCanvas(FigureCanvas):
         def mark(
             x: Optional[float], yv: Optional[float], label: str, color: str
         ) -> None:
-            if x is None or yv is None or not np.isfinite(x):
+            if x is None or yv is None or (not np.isfinite(x)) or x < 0:
                 return
             self.ax.scatter(
                 [x],
@@ -194,18 +195,35 @@ class BreathPlotCanvas(FigureCanvas):
         mark(state.exhale_pause_t, y_at(state.exhale_pause_t), "", _COLOR_EXHALE_PAUSE)
         # --- store marker x positions for hit testing ---
         self._marker_xs = {}
-        if state.inhale_t is not None and np.isfinite(state.inhale_t):
+        if (
+            state.inhale_t is not None
+            and np.isfinite(state.inhale_t)
+            and state.inhale_t >= 0
+        ):
             self._marker_xs[EventType.INHALE_ONSET] = float(state.inhale_t)
-        if state.exhale_t is not None and np.isfinite(state.exhale_t):
+        if (
+            state.exhale_t is not None
+            and np.isfinite(state.exhale_t)
+            and state.exhale_t >= 0
+        ):
             self._marker_xs[EventType.EXHALE_ONSET] = float(state.exhale_t)
-        if state.inhale_pause_t is not None and np.isfinite(state.inhale_pause_t):
+        if (
+            state.inhale_pause_t is not None
+            and np.isfinite(state.inhale_pause_t)
+            and state.inhale_pause_t >= 0
+        ):
             self._marker_xs[EventType.INHALE_PAUSE_ONSET] = float(state.inhale_pause_t)
-        if state.exhale_pause_t is not None and np.isfinite(state.exhale_pause_t):
+        if (
+            state.exhale_pause_t is not None
+            and np.isfinite(state.exhale_pause_t)
+            and state.exhale_pause_t >= 0
+        ):
             self._marker_xs[EventType.EXHALE_PAUSE_ONSET] = float(state.exhale_pause_t)
 
         self.ax.set_title(
-            f"Breath {state.breath_index + 1}/{state.n_breaths} ({state.status})"
+            f"Breath {state.breath_index +1}/{state.n_breaths} ({state.status})"
         )
+
         self.draw_idle()
 
     def update_markers(
@@ -241,7 +259,7 @@ class BreathPlotCanvas(FigureCanvas):
         def mark(
             x: Optional[float], yv: Optional[float], label: str, color: str
         ) -> None:
-            if x is None or yv is None or not np.isfinite(x):
+            if x is None or yv is None or (not np.isfinite(x)) or x < 0:
                 return
             self.ax.scatter(
                 [x],
@@ -261,18 +279,35 @@ class BreathPlotCanvas(FigureCanvas):
         mark(state.exhale_pause_t, y_at(state.exhale_pause_t), "", _COLOR_EXHALE_PAUSE)
 
         self._marker_xs = {}
-        if state.inhale_t is not None and np.isfinite(state.inhale_t):
+        if (
+            state.inhale_t is not None
+            and np.isfinite(state.inhale_t)
+            and state.inhale_t >= 0
+        ):
             self._marker_xs[EventType.INHALE_ONSET] = float(state.inhale_t)
-        if state.exhale_t is not None and np.isfinite(state.exhale_t):
+        if (
+            state.exhale_t is not None
+            and np.isfinite(state.exhale_t)
+            and state.exhale_t >= 0
+        ):
             self._marker_xs[EventType.EXHALE_ONSET] = float(state.exhale_t)
-        if state.inhale_pause_t is not None and np.isfinite(state.inhale_pause_t):
+        if (
+            state.inhale_pause_t is not None
+            and np.isfinite(state.inhale_pause_t)
+            and state.inhale_pause_t >= 0
+        ):
             self._marker_xs[EventType.INHALE_PAUSE_ONSET] = float(state.inhale_pause_t)
-        if state.exhale_pause_t is not None and np.isfinite(state.exhale_pause_t):
+        if (
+            state.exhale_pause_t is not None
+            and np.isfinite(state.exhale_pause_t)
+            and state.exhale_pause_t >= 0
+        ):
             self._marker_xs[EventType.EXHALE_PAUSE_ONSET] = float(state.exhale_pause_t)
 
         self.ax.set_title(
             f"Breath {state.breath_index + 1}/{state.n_breaths} ({state.status})"
         )
+
         if keep_window and xlim is not None and ylim is not None:
             self.ax.set_xlim(xlim)
             self.ax.set_ylim(ylim)
@@ -374,7 +409,7 @@ class FeatureCard(QFrame):
         if x is None:
             self.value_label.setText("NaN")
             return
-        if np.isnan(x):
+        if (not np.isfinite(x)) or x < 0:
             self.value_label.setText("NaN")
             return
         self.value_label.setText(f"{x:.3f}")
@@ -393,9 +428,19 @@ class BreathMetricsMainWindow(QMainWindow):
         self.setWindowTitle("BreathMetrics GUI")
         self.resize(1500, 800)
 
+        ## avoid pickle error in second GUI launch in ipykernels.
+        ## THIS IS A REALLY HACKY FIX. Find better later.
+
         self.bm = bm_obj
-        global bm_backup
-        bm_backup = copy.deepcopy(bm_obj)
+        # global bm_backup  # Not needed.
+        tmp_win = getattr(bm_obj, "_inspect_window", None)
+
+        if tmp_win is not None:
+            bm_obj._inspect_window = None
+        self._backup = copy.deepcopy(bm_obj)
+
+        if tmp_win is not None:
+            bm_obj._inspect_window = tmp_win
         self.editor = BreathEditor(self.bm)
 
         self.current_idx: int = 0
@@ -541,6 +586,10 @@ class BreathMetricsMainWindow(QMainWindow):
         fs = float(self.bm.srate)
         onset_s = float(self.bm.inhale_onsets[i]) / fs
         offset_s = float(self.bm.exhale_offsets[i]) / fs
+        if onset_s < 0:
+            onset_s = float("nan")
+        if offset_s < 0:
+            offset_s = float("nan")
 
         is_valid = getattr(self.bm, "is_valid", None)
         status = "valid"
@@ -743,15 +792,15 @@ class BreathMetricsMainWindow(QMainWindow):
         )
         if resp != QMessageBox.StandardButton.Yes:
             return
-        if bm_backup is not None:
+        if self._backup is not None:
             self._restore_from_backup()
         self.close()
 
     def _restore_from_backup(self) -> None:
-        if bm_backup is None:
+        if self._backup is None:
             return
         self.bm.__dict__.clear()
-        self.bm.__dict__.update(copy.deepcopy(bm_backup.__dict__))
+        self.bm.__dict__.update(copy.deepcopy(self._backup.__dict__))
 
     def _create_inhale_pause(self) -> None:
         i = self.current_idx
@@ -763,7 +812,7 @@ class BreathMetricsMainWindow(QMainWindow):
     def _remove_inhale_pause(self) -> None:
         i = self.current_idx
         # TODO: add BreathEditor.clear_event(...) for purity
-        self.bm.inhale_pause_onsets[i] = np.nan
+        self.bm.inhale_pause_onsets[i] = MISSING_EVENT
         # recompute inhale-dependent stuff:
         self.editor.move_event(
             i, EventType.INHALE_ONSET, int(round(float(self.bm.inhale_onsets[i])))
@@ -780,7 +829,7 @@ class BreathMetricsMainWindow(QMainWindow):
     def _remove_exhale_pause(self) -> None:
         i = self.current_idx
         # TODO: add BreathEditor.clear_event(...) for purity
-        self.bm.exhale_pause_onsets[i] = np.nan
+        self.bm.exhale_pause_onsets[i] = MISSING_EVENT
         # recompute exhale-dependent stuff:
         self.editor.move_event(
             i, EventType.EXHALE_ONSET, int(round(float(self.bm.exhale_onsets[i])))
@@ -796,6 +845,12 @@ class BreathMetricsMainWindow(QMainWindow):
         inhale_onsets = np.asarray(self.bm.inhale_onsets, dtype=float)
         exhale_offsets = np.asarray(self.bm.exhale_offsets, dtype=float)
 
+        n = inhale_onsets.shape[0]
+        if exhale_offsets.shape[0] < n:
+            pad = np.full(n - exhale_offsets.shape[0], MISSING_EVENT, dtype=float)
+            exhale_offsets = np.concatenate([exhale_offsets, pad])
+            self.bm.exhale_offsets = exhale_offsets.astype(int)
+
         # is_valid stored/attached by BreathEditor; default valid if missing
         is_valid = getattr(self.bm, "is_valid", None)
         if is_valid is None:
@@ -803,15 +858,21 @@ class BreathMetricsMainWindow(QMainWindow):
         else:
             is_valid = np.asarray(is_valid, dtype=bool)
 
-        n = inhale_onsets.shape[0]
         rows: list[BreathRow] = []
         for i in range(n):
             onset_s = float(inhale_onsets[i]) / fs
             offset_s = float(exhale_offsets[i]) / fs
+            if onset_s < 0:
+                onset_s = float("nan")
+            if offset_s < 0:
+                offset_s = float("nan")
             status = "valid" if bool(is_valid[i]) else "rejected"
             rows.append(
                 BreathRow(
-                    breath_no=i + 1, onset_s=onset_s, offset_s=offset_s, status=status
+                    breath_no=i + 1,
+                    onset_s=onset_s,
+                    offset_s=offset_s,
+                    status=status,
                 )
             )
         return rows
@@ -820,8 +881,23 @@ class BreathMetricsMainWindow(QMainWindow):
         fs = float(self.bm.srate)
 
         # breath window definition per your spec:
-        start = int(round(float(self.bm.inhale_onsets[idx])))
-        end = int(round(float(self.bm.exhale_offsets[idx])))
+        inhale_onsets = self.bm.inhale_onsets
+        exhale_offsets = self.bm.exhale_offsets
+        if idx >= len(inhale_onsets):
+            return BreathViewState(
+                breath_index=idx,
+                n_breaths=n,
+                status="valid",
+            )
+        start = int(round(float(inhale_onsets[idx])))
+        if idx < len(exhale_offsets):
+            end = int(round(float(exhale_offsets[idx])))
+        else:
+            end = start
+        if start < 0:
+            start = 0
+        if end < start:
+            end = start
 
         y_all = np.asarray(self.bm.bsl_corrected_respiration, dtype=np.float64)
 
@@ -836,8 +912,13 @@ class BreathMetricsMainWindow(QMainWindow):
         y = y_all[lo : hi + 1].astype(np.float64)
 
         # markers also in absolute seconds
-        def s_to_sec(samp_arr, i) -> float:
-            return float(samp_arr[i]) / fs
+        def s_to_sec(samp_arr, i) -> Optional[float]:
+            if i >= len(samp_arr):
+                return None
+            v = float(samp_arr[i])
+            if v < 0 or not np.isfinite(v):
+                return None
+            return v / fs
 
         inhale_t = s_to_sec(self.bm.inhale_onsets, idx)
         exhale_t = s_to_sec(self.bm.exhale_onsets, idx)

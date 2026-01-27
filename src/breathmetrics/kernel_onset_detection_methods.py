@@ -7,6 +7,7 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 from breathmetrics.utils import (
+    MISSING_EVENT,
     find_inflection_vectorized,
     find_inflection_from_mid3,
 )
@@ -56,8 +57,8 @@ def find_onsets_and_pauses_legacy(
     exhaleonsets = np.zeros_like(troughs)
 
     # inhale pauses happen after inhale osnets, exhale pauses happen after exhale onsets
-    inhalepauseonsets = np.full_like(peaks, np.nan, dtype=float)
-    exhalepauseonsets = np.full_like(troughs, np.nan, dtype=float)
+    inhalepauseonsets = np.full_like(peaks, MISSING_EVENT, dtype=int)
+    exhalepauseonsets = np.full_like(troughs, MISSING_EVENT, dtype=int)
 
     # bin threshold setup
     if nbins >= 100:
@@ -118,7 +119,7 @@ def find_onsets_and_pauses_legacy(
             possible_inhale_ind = inhale_window < this_inhale_thr
             mask = possible_inhale_ind == 1
             inhale_onset = np.where(mask)[0][-1]
-            exhalepauseonsets[thisbreath] = np.nan
+            exhalepauseonsets[thisbreath] = MISSING_EVENT
             inhaleonsets[thisbreath + 1] = inhale_onset + troughs[thisbreath]
 
         else:
@@ -168,7 +169,7 @@ def find_onsets_and_pauses_legacy(
             possible_exhale_ind = exhale_window > this_exhale_thr
             mask = possible_exhale_ind == 1
             exhale_onset = np.where(mask)[0][-1]
-            inhalepauseonsets[thisbreath] = np.nan
+            inhalepauseonsets[thisbreath] = MISSING_EVENT
             exhaleonsets[thisbreath] = exhale_onset + peaks[thisbreath]
 
         else:
@@ -235,7 +236,7 @@ def find_onsets_new(resp: ArrayLike, fs: float, peaks: ArrayLike) -> np.ndarray:
     peaks = np.asarray(peaks, dtype=int)
     nsamples = len(resp)
 
-    inhaleonsets = np.full_like(peaks, np.nan, dtype=float)
+    inhaleonsets = np.full_like(peaks, MISSING_EVENT, dtype=int)
     for i in range(len(peaks)):
         curidx = peaks[i]
         winstart = curidx - fs * 3
@@ -271,7 +272,7 @@ def find_onsets_new(resp: ArrayLike, fs: float, peaks: ArrayLike) -> np.ndarray:
         # second guess
         adj2 = find_inflection_from_mid3(insig2_sm, adj, fs, insig2)
         bStart = adj2 + winstart
-        inhaleonsets[i] = bStart
+        inhaleonsets[i] = int(round(bStart))
     return inhaleonsets
 
 
@@ -294,7 +295,7 @@ def find_pause_slope(
     outputs:
         exhale_offsets: indices of expiratory offsets (same as pause onsets)
     """
-    exhale_offsets = np.full_like(exhaletroughs, np.nan, dtype=float)
+    exhale_offsets = np.full_like(exhaletroughs, MISSING_EVENT, dtype=int)
     exhale_offsets = exhale_offsets[:-1]  # first breath doesn't need a pause
 
     x = np.asarray(resp, dtype=float)
@@ -334,7 +335,7 @@ def find_pause_slope(
         if n - 2 * minEdge < 1:
             bic2 = np.nan
             # exhale offset of this breath is nan
-            exhale_offsets[i] = np.nan
+            exhale_offsets[i] = MISSING_EVENT
             # continue to next loop
             continue
 
@@ -365,9 +366,9 @@ def find_pause_slope(
                 # choose 2 steps
                 exhale_offsets[i] = exhaletroughs[i] + best_tauIdx
             else:
-                exhale_offsets[i] = np.nan
+                exhale_offsets[i] = MISSING_EVENT
         else:
-            exhale_offsets[i] = np.nan
+            exhale_offsets[i] = MISSING_EVENT
 
     return exhale_offsets
 
@@ -390,7 +391,7 @@ def find_pause_slope_vectorized(
     exhaletroughs = np.asarray(exhaletroughs, dtype=int)
     fs = float(fs)
 
-    exhale_offsets = np.full_like(exhaletroughs, np.nan, dtype=float)[:-1]
+    exhale_offsets = np.full_like(exhaletroughs, MISSING_EVENT, dtype=int)[:-1]
 
     tiny = np.finfo(float).tiny
 
@@ -523,7 +524,7 @@ def find_pause_slope_vectorized(
         y = x[start:end]
         n = y.size
         if n == 0:
-            exhale_offsets[i] = np.nan
+            exhale_offsets[i] = MISSING_EVENT
             continue
 
         t = np.arange(n, dtype=float) / fs
@@ -535,7 +536,7 @@ def find_pause_slope_vectorized(
         # ----- 2-step (hinge)
         minEdge = max(1, int(np.floor(min_edge_ms / 1000.0 * fs)))
         if n - 2 * minEdge < 1:
-            exhale_offsets[i] = np.nan
+            exhale_offsets[i] = MISSING_EVENT
             continue
 
         best_rss, best_beta, best_tauIdx = _best_hinge_fit(y0, t, minEdge)
@@ -549,9 +550,9 @@ def find_pause_slope_vectorized(
             if (c < 0) and (abs(slopeEarly) * flat_frac >= slopeLate):
                 exhale_offsets[i] = exhaletroughs[i] + best_tauIdx
             else:
-                exhale_offsets[i] = np.nan
+                exhale_offsets[i] = MISSING_EVENT
         else:
-            exhale_offsets[i] = np.nan
+            exhale_offsets[i] = MISSING_EVENT
 
     # no but actually this is exhale pause onset instead of exhale offset
     exhale_pause_onsets = exhale_offsets

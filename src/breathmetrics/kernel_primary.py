@@ -7,7 +7,7 @@ from numpy.typing import ArrayLike
 
 ## baseline correction
 # kernel.py  (pure function)
-from .utils import detrend_linear, fft_smooth, zscore
+from .utils import MISSING_EVENT, detrend_linear, fft_smooth, zscore
 
 
 def correct_respiration_to_baseline(
@@ -234,22 +234,22 @@ def find_respiratory_offsets(
       exhalePauseOnsets[i] is present, then exhalePauseOnsets[i]-1.
     - Final exhale offset: first positive slope after last exhale onset,
       accepted only if its distance lies within [avg/4, 1.75*avg] where avg is
-      the mean exhale duration from all previous exhales. Otherwise NaN.
+      the mean exhale duration from all previous exhales. Otherwise missing.
     """
     x = np.asarray(resp, dtype=float).ravel()
     inh_on = np.asarray(inhale_onsets, dtype=int).ravel()
     exh_on = np.asarray(exhale_onsets, dtype=int).ravel()
-    inh_pause = np.asarray(inhale_pause_onsets, dtype=float).ravel()
-    exh_pause = np.asarray(exhale_pause_onsets, dtype=float).ravel()
+    inh_pause = np.asarray(inhale_pause_onsets, dtype=int).ravel()
+    exh_pause = np.asarray(exhale_pause_onsets, dtype=int).ravel()
 
     # Outputs: match MATLAB shapes (inhale offsets sized like exhale onsets)
     inhale_offsets = np.zeros_like(exh_on, dtype=int)
-    exhale_offsets = np.zeros_like(exh_on, dtype=float)  # last can be NaN
+    exhale_offsets = np.full_like(exh_on, MISSING_EVENT, dtype=int)
 
     # ---- Inhale offsets ----
     # for bi = 1:length(exhaleOnsets)
     for bi in range(exh_on.size):
-        if np.isnan(inh_pause[bi]):
+        if inh_pause[bi] < 0:
             inhale_offsets[bi] = exh_on[bi] - 1
         else:
             inhale_offsets[bi] = int(inh_pause[bi]) - 1
@@ -257,7 +257,7 @@ def find_respiratory_offsets(
     # ---- Exhale offsets (all but last) ----
     # exhale i ends at exhalePauseOnsets[i]-1 if present; else just before next inhale onset
     for bi in range(exh_on.size - 1):
-        if np.isnan(exh_pause[bi]):
+        if exh_pause[bi] < 0:
             exhale_offsets[bi] = inh_on[bi + 1] - 1
         else:
             exhale_offsets[bi] = int(exh_pause[bi]) - 1
@@ -298,9 +298,13 @@ def find_respiratory_offsets(
     putativeexhaleoffset = np.where(np.diff(finalwindow) > 0)[0][0]
 
     # check if there's an actual exhale end that it's not artifact
-    avgexhalelength = np.mean(
-        exhale_offsets[:-1] - exh_on[:-1]
-    )  # from 1 to end-1 in matlab index.
+    valid_exh = exhale_offsets[:-1] >= 0
+    if np.any(valid_exh):
+        avgexhalelength = np.mean(
+            exhale_offsets[:-1][valid_exh] - exh_on[:-1][valid_exh]
+        )
+    else:
+        avgexhalelength = np.nan
     lowerlimit = avgexhalelength / 4
     upperlimit = avgexhalelength * 1.75
     if (
@@ -308,7 +312,7 @@ def find_respiratory_offsets(
         or putativeexhaleoffset < lowerlimit
         or putativeexhaleoffset >= upperlimit
     ):
-        exhale_offsets[-1] = np.nan
+        exhale_offsets[-1] = MISSING_EVENT
     else:
         exhale_offsets[-1] = exh_on[-1] + putativeexhaleoffset - 1
 
@@ -332,12 +336,12 @@ def find_respiratory_durations(
     """
 
     # set input types
-    inhale_onsets = np.asarray(inhale_onsets, dtype=float)
-    inhale_offsets = np.asarray(inhale_offsets, dtype=float)
-    exhale_onsets = np.asarray(exhale_onsets, dtype=float)
-    exhale_offsets = np.asarray(exhale_offsets, dtype=float)
-    inhalepause_onsets = np.asarray(inhalepause_onsets, dtype=float)
-    exhalepause_onsets = np.asarray(exhalepause_onsets, dtype=float)
+    inhale_onsets = np.asarray(inhale_onsets, dtype=int)
+    inhale_offsets = np.asarray(inhale_offsets, dtype=int)
+    exhale_onsets = np.asarray(exhale_onsets, dtype=int)
+    exhale_offsets = np.asarray(exhale_offsets, dtype=int)
+    inhalepause_onsets = np.asarray(inhalepause_onsets, dtype=int)
+    exhalepause_onsets = np.asarray(exhalepause_onsets, dtype=int)
 
     inhale_durations = np.zeros_like(inhale_offsets, dtype=float)
     exhale_durations = np.zeros_like(exhale_offsets, dtype=float)
@@ -345,20 +349,20 @@ def find_respiratory_durations(
     exhalepause_durations = np.zeros_like(exhale_offsets, dtype=float)
 
     for i in range(len(inhale_offsets)):
-        if not np.isnan(inhale_offsets[i]):
+        if inhale_offsets[i] >= 0:
             inhale_durations[i] = (inhale_offsets[i] - inhale_onsets[i]) / fs
         else:
             inhale_durations[i] = np.nan
 
     for e in range(len(exhale_onsets)):
-        if not np.isnan(exhale_offsets[e]):
+        if exhale_offsets[e] >= 0:
             exhale_durations[e] = (exhale_offsets[e] - exhale_onsets[e]) / fs
         else:
             exhale_durations[e] = np.nan
 
     # inhale pause duration
     for ip in range(len(inhalepause_onsets)):
-        if not np.isnan(inhalepause_onsets[ip]):
+        if inhalepause_onsets[ip] >= 0:
             inhalepause_durations[ip] = (
                 exhale_onsets[ip] - inhalepause_onsets[ip]
             ) / fs
@@ -367,7 +371,7 @@ def find_respiratory_durations(
 
     # exhale pause duration
     for ep in range(len(exhalepause_onsets)):
-        if not np.isnan(exhalepause_onsets[ep]):
+        if exhalepause_onsets[ep] >= 0:
             if ep < len(exhale_offsets) - 1:
                 exhalepause_durations[ep] = (
                     inhale_onsets[ep + 1] - exhalepause_onsets[ep]
@@ -404,19 +408,19 @@ def find_respiratory_volume(
     inh_on = np.asarray(inhale_onsets, dtype=int).ravel()
     inh_off = np.asarray(inhale_offsets, dtype=int).ravel()
     exh_on = np.asarray(exhale_onsets, dtype=int).ravel()
-    exh_off = np.asarray(exhale_offsets, dtype=float).ravel()  # can be NaN
+    exh_off = np.asarray(exhale_offsets, dtype=int).ravel()
 
     inhale_volumes = np.zeros_like(inh_off, dtype=float)
     exhale_volumes = np.zeros_like(exh_off, dtype=float)
 
     for i in range(inh_on.size):
-        if not np.isnan(inh_off[i]):
+        if inh_off[i] >= 0:
             inhale_volumes[i] = np.sum(x[inh_on[i] : inh_off[i]])
         else:
             inhale_volumes[i] = np.nan
 
     for e in range(exh_on.size):
-        if not np.isnan(exh_off[e]):
+        if exh_off[e] >= 0:
             exhale_volumes[e] = np.sum(x[exh_on[e] : int(exh_off[e])])
             exhale_volumes[e] = abs(exhale_volumes[e])  # make exhale volume positive
         else:
@@ -439,11 +443,17 @@ def find_time_to_peak_trough(
     """
     compute inhale time to peak and exhale time to trough
     """
-    inhale_time2peak = np.zeros_like(inhale_onsets, dtype=float)
-    exhale_time2trough = np.zeros_like(exhale_onsets, dtype=float)
+    inhale_time2peak = np.full_like(inhale_onsets, np.nan, dtype=float)
+    exhale_time2trough = np.full_like(exhale_onsets, np.nan, dtype=float)
 
-    inhale_time2peak = (inhale_peaks - inhale_onsets) / fs
-    exhale_time2trough = (exhale_troughs - exhale_onsets) / fs
+    valid_inh = (inhale_onsets >= 0) & (inhale_peaks >= 0)
+    valid_exh = (exhale_onsets >= 0) & (exhale_troughs >= 0)
+    inhale_time2peak[valid_inh] = (
+        inhale_peaks[valid_inh] - inhale_onsets[valid_inh]
+    ) / fs
+    exhale_time2trough[valid_exh] = (
+        exhale_troughs[valid_exh] - exhale_onsets[valid_exh]
+    ) / fs
     return inhale_time2peak, exhale_time2trough
 
 
@@ -500,8 +510,8 @@ def create_respiratory_erp_matrix(
     erp_rows = []
 
     for this_idx, this_event in enumerate(event_array):
-        # Skip NaN events
-        if np.isnan(this_event):
+        # Skip missing events
+        if (not np.isfinite(this_event)) or int(this_event) < 0:
             rejected_events.append(np.nan)
             rejected_event_inds.append(this_idx)
             if verbose:

@@ -316,6 +316,28 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
         self.find_pause_slope()
 
         self.find_respiratory_offsets()
+        self.inhale_peaks = breathmetrics.utils.normalize_event_array(self.inhale_peaks)
+        self.exhale_troughs = breathmetrics.utils.normalize_event_array(
+            self.exhale_troughs
+        )
+        self.inhale_onsets = breathmetrics.utils.normalize_event_array(
+            self.inhale_onsets
+        )
+        self.exhale_onsets = breathmetrics.utils.normalize_event_array(
+            self.exhale_onsets
+        )
+        self.inhale_offsets = breathmetrics.utils.normalize_event_array(
+            self.inhale_offsets
+        )
+        self.exhale_offsets = breathmetrics.utils.normalize_event_array(
+            self.exhale_offsets
+        )
+        self.inhale_pause_onsets = breathmetrics.utils.normalize_event_array(
+            self.inhale_pause_onsets
+        )
+        self.exhale_pause_onsets = breathmetrics.utils.normalize_event_array(
+            self.exhale_pause_onsets
+        )
         self.is_valid = np.ones(len(self.inhale_onsets), dtype=bool)
 
         # 4) Durations

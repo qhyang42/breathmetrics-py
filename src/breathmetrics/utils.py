@@ -4,6 +4,19 @@ from numpy.typing import ArrayLike
 
 ## utilities for breathmetrics
 
+MISSING_EVENT = -1
+
+
+def normalize_event_array(arr: ArrayLike) -> np.ndarray:
+    a = np.asarray(arr)
+    if np.issubdtype(a.dtype, np.floating):
+        a = np.nan_to_num(a, nan=MISSING_EVENT)
+    return a.astype(int)
+
+
+def event_is_valid(x: int | float) -> bool:
+    return bool(np.isfinite(x)) and x >= 0
+
 
 # check inputs
 def check_input(
