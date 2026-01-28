@@ -7,7 +7,7 @@ from typing import Optional, cast
 import numpy as np
 from numpy.typing import NDArray
 
-from breathmetrics.utils import MISSING_EVENT
+from breathmetrics.utils import MISSING_EVENT, normalize_event_array
 
 
 # ---------- typing ----------
@@ -99,7 +99,7 @@ class BreathEditor:
         self,
         model: object,
         *,
-        resp_attr: str = "bsl_corrected_respiration",
+        resp_attr: str = "baseline_corrected_respiration",
         fs_attr: str = "srate",
         # optional: if your model ever uses a different attribute name later
         is_valid_attr: str = "is_valid",
@@ -156,6 +156,17 @@ class BreathEditor:
         self._check_breath_i(breath_i)
         self._check_sample_int(new_sample)
 
+        if not self._supports_event(event):
+            return EditResult(
+                breath_i=breath_i,
+                event=event,
+                requested_sample=new_sample,
+                applied_sample=new_sample,
+                was_clamped=False,
+                created=False,
+                changed_fields=(),
+            )
+
         # snapshot for undo
         rec = self._make_undo_record(breath_i, event)
         self._undo_stack.append(rec)
@@ -169,6 +180,8 @@ class BreathEditor:
         changed_fields = self._recompute_for_event(breath_i, event)
 
         self._dirty_breaths.add(breath_i)
+
+        self._mark_edited(event, changed_fields)
 
         return EditResult(
             breath_i=breath_i,
@@ -261,10 +274,64 @@ class BreathEditor:
             raise ValueError(f"bm.{self._resp_attr} is None")
         return _as_float_array(resp)
 
+    def _event_length(self) -> int:
+        arr = getattr(self.bm, "inhale_onsets", None)
+        if arr is None:
+            return 0
+        return int(np.asarray(arr).shape[0])
+
+    def _supports(self, feature: str) -> bool:
+        supports = getattr(self.bm, "supports", None)
+        if callable(supports):
+            try:
+                return bool(supports(feature))
+            except Exception:
+                return False
+        return getattr(self.bm, feature, None) is not None
+
+    def _supports_event(self, event: EventType) -> bool:
+        mapping = {
+            EventType.INHALE_ONSET: "inhale_onsets",
+            EventType.EXHALE_ONSET: "exhale_onsets",
+            EventType.INHALE_PAUSE_ONSET: "inhale_pause_onsets",
+            EventType.EXHALE_PAUSE_ONSET: "exhale_pause_onsets",
+        }
+        return self._supports(mapping[event])
+
+    def _mark_edited(self, event: EventType, changed_fields: tuple[str, ...]) -> None:
+        statuses = getattr(self.bm, "statuses", None)
+        if not isinstance(statuses, dict):
+            return
+        mapping = {
+            EventType.INHALE_ONSET: "inhale_onsets",
+            EventType.EXHALE_ONSET: "exhale_onsets",
+            EventType.INHALE_PAUSE_ONSET: "inhale_pause_onsets",
+            EventType.EXHALE_PAUSE_ONSET: "exhale_pause_onsets",
+        }
+        to_mark = [mapping[event], *changed_fields]
+        computed = getattr(self.bm, "computed_features", None)
+        for name in to_mark:
+            if not self._supports(name):
+                continue
+            statuses[name] = "edited"
+            if isinstance(computed, set):
+                computed.add(name)
+
     def _get_event_array(self, attr: str) -> IntArray:
-        arr = np.asarray(getattr(self.bm, attr))
+        arr = getattr(self.bm, attr, None)
+        if arr is None:
+            if not self._supports(attr):
+                return cast(
+                    IntArray,
+                    np.full(self._event_length(), MISSING_EVENT, dtype=np.int64),
+                )
+            arr = np.full(self._event_length(), MISSING_EVENT, dtype=np.int64)
+            setattr(self.bm, attr, arr)
+            return cast(IntArray, arr)
+
+        arr = np.asarray(arr)
         if arr.dtype.kind != "i":
-            arr = np.nan_to_num(arr, nan=MISSING_EVENT).astype(np.int64)
+            arr = normalize_event_array(arr)
             setattr(self.bm, attr, arr)
         return cast(IntArray, arr)
 
@@ -292,7 +359,13 @@ class BreathEditor:
         and should not move after inhale_onset[i+1] (if defined).
         """
         inhale_onsets = self._get_event_array("inhale_onsets")
-        exhale_offsets = self._get_event_array("exhale_offsets")
+        if (
+            self._supports("exhale_offsets")
+            and getattr(self.bm, "exhale_offsets", None) is not None
+        ):
+            exhale_offsets = self._get_event_array("exhale_offsets")
+        else:
+            exhale_offsets = self._get_event_array("exhale_onsets")
 
         sig_lo, sig_hi = self._signal_bounds()
 
@@ -346,8 +419,31 @@ class BreathEditor:
         """
         inhale_onsets = self._get_event_array("inhale_onsets")
         exhale_onsets = self._get_event_array("exhale_onsets")
-        inhale_peaks = self._get_event_array("inhale_peaks")
-        exhale_troughs = self._get_event_array("exhale_troughs")
+        if (
+            self._supports("inhale_peaks")
+            and getattr(self.bm, "inhale_peaks", None) is not None
+        ):
+            inhale_peaks = self._get_event_array("inhale_peaks")
+        elif (
+            self._supports("signal_peaks")
+            and getattr(self.bm, "signal_peaks", None) is not None
+        ):
+            inhale_peaks = self._get_event_array("signal_peaks")
+        else:
+            inhale_peaks = inhale_onsets
+
+        if (
+            self._supports("exhale_troughs")
+            and getattr(self.bm, "exhale_troughs", None) is not None
+        ):
+            exhale_troughs = self._get_event_array("exhale_troughs")
+        elif (
+            self._supports("signal_troughs")
+            and getattr(self.bm, "signal_troughs", None) is not None
+        ):
+            exhale_troughs = self._get_event_array("signal_troughs")
+        else:
+            exhale_troughs = exhale_onsets
 
         sig_lo, sig_hi = self._signal_bounds()
         neigh_lo, neigh_hi = self._breath_neighbor_bounds(i)
@@ -475,26 +571,70 @@ class BreathEditor:
         """
         if event in (EventType.INHALE_ONSET, EventType.INHALE_PAUSE_ONSET):
             self._recompute_inhale(i)
-            return ("inhale_time2peak", "inhale_durations", "inhale_volumes")
+            return tuple(
+                name
+                for name in ("inhale_time2peak", "inhale_durations", "inhale_volumes")
+                if self._supports(name) and getattr(self.bm, name, None) is not None
+            )
 
         if event in (EventType.EXHALE_ONSET, EventType.EXHALE_PAUSE_ONSET):
             self._recompute_exhale(i)
-            return ("exhale_time2trough", "exhale_durations", "exhale_volumes")
+            return tuple(
+                name
+                for name in ("exhale_time2trough", "exhale_durations", "exhale_volumes")
+                if self._supports(name) and getattr(self.bm, name, None) is not None
+            )
 
         return ()
 
     def _recompute_inhale(self, i: int) -> None:
+        if not (
+            self._supports("inhale_time2peak")
+            or self._supports("inhale_durations")
+            or self._supports("inhale_volumes")
+        ):
+            return
         fs = self._get_fs()
         resp = self._get_resp()
 
         inhale_onsets = self._get_event_array("inhale_onsets")
-        inhale_peaks = self._get_event_array("inhale_peaks")
-        inhale_offsets = self._get_event_array("inhale_offsets")
-        inhale_pause_onsets = self._get_event_array("inhale_pause_onsets")
+        if (
+            self._supports("inhale_peaks")
+            and getattr(self.bm, "inhale_peaks", None) is not None
+        ):
+            inhale_peaks = self._get_event_array("inhale_peaks")
+        else:
+            inhale_peaks = inhale_onsets
+        if (
+            self._supports("inhale_offsets")
+            and getattr(self.bm, "inhale_offsets", None) is not None
+        ):
+            inhale_offsets = self._get_event_array("inhale_offsets")
+        else:
+            inhale_offsets = inhale_onsets
+        if (
+            self._supports("inhale_pause_onsets")
+            and getattr(self.bm, "inhale_pause_onsets", None) is not None
+        ):
+            inhale_pause_onsets = self._get_event_array("inhale_pause_onsets")
+        else:
+            inhale_pause_onsets = np.full_like(inhale_onsets, MISSING_EVENT)
 
-        inhale_time2peak = _as_float_array(getattr(self.bm, "inhale_time2peak"))
-        inhale_durations = _as_float_array(getattr(self.bm, "inhale_durations"))
-        inhale_volumes = _as_float_array(getattr(self.bm, "inhale_volumes"))
+        inhale_time2peak = (
+            _as_float_array(getattr(self.bm, "inhale_time2peak"))
+            if getattr(self.bm, "inhale_time2peak", None) is not None
+            else None
+        )
+        inhale_durations = (
+            _as_float_array(getattr(self.bm, "inhale_durations"))
+            if getattr(self.bm, "inhale_durations", None) is not None
+            else None
+        )
+        inhale_volumes = (
+            _as_float_array(getattr(self.bm, "inhale_volumes"))
+            if getattr(self.bm, "inhale_volumes", None) is not None
+            else None
+        )
 
         onset = _safe_int(inhale_onsets[i])
 
@@ -505,34 +645,73 @@ class BreathEditor:
         end = _safe_int(end_f) if _finite(end_f) else onset
 
         # duration (sec)
-        inhale_durations[i] = float(max(0, end - onset) / fs)
+        if inhale_durations is not None:
+            inhale_durations[i] = float(max(0, end - onset) / fs)
 
         # time to peak (sec)
         peak = _safe_int(inhale_peaks[i]) if _finite(inhale_peaks[i]) else onset
-        inhale_time2peak[i] = float(max(0, peak - onset) / fs)
+        if inhale_time2peak is not None:
+            inhale_time2peak[i] = float(max(0, peak - onset) / fs)
 
         # volume (simple trapezoid integral over corrected resp)
         lo, hi = sorted((onset, end))
         lo = max(0, lo)
         hi = min(resp.shape[0] - 1, hi)
-        if hi <= lo:
-            inhale_volumes[i] = 0.0
-        else:
-            seg = resp[lo : hi + 1]
-            inhale_volumes[i] = float(np.trapz(seg, dx=1.0 / fs))
+        if inhale_volumes is not None:
+            if hi <= lo:
+                inhale_volumes[i] = 0.0
+            else:
+                seg = resp[lo : hi + 1]
+                inhale_volumes[i] = float(np.trapz(seg, dx=1.0 / fs))
 
     def _recompute_exhale(self, i: int) -> None:
+        if not (
+            self._supports("exhale_time2trough")
+            or self._supports("exhale_durations")
+            or self._supports("exhale_volumes")
+        ):
+            return
         fs = self._get_fs()
         resp = self._get_resp()
 
         exhale_onsets = self._get_event_array("exhale_onsets")
-        exhale_troughs = self._get_event_array("exhale_troughs")
-        exhale_offsets = self._get_event_array("exhale_offsets")
-        exhale_pause_onsets = self._get_event_array("exhale_pause_onsets")
+        if (
+            self._supports("exhale_troughs")
+            and getattr(self.bm, "exhale_troughs", None) is not None
+        ):
+            exhale_troughs = self._get_event_array("exhale_troughs")
+        else:
+            exhale_troughs = exhale_onsets
+        if (
+            self._supports("exhale_offsets")
+            and getattr(self.bm, "exhale_offsets", None) is not None
+        ):
+            exhale_offsets = self._get_event_array("exhale_offsets")
+        else:
+            exhale_offsets = exhale_onsets
+        if (
+            self._supports("exhale_pause_onsets")
+            and getattr(self.bm, "exhale_pause_onsets", None) is not None
+        ):
+            exhale_pause_onsets = self._get_event_array("exhale_pause_onsets")
+        else:
+            exhale_pause_onsets = np.full_like(exhale_onsets, MISSING_EVENT)
 
-        exhale_time2trough = _as_float_array(getattr(self.bm, "exhale_time2trough"))
-        exhale_durations = _as_float_array(getattr(self.bm, "exhale_durations"))
-        exhale_volumes = _as_float_array(getattr(self.bm, "exhale_volumes"))
+        exhale_time2trough = (
+            _as_float_array(getattr(self.bm, "exhale_time2trough"))
+            if getattr(self.bm, "exhale_time2trough", None) is not None
+            else None
+        )
+        exhale_durations = (
+            _as_float_array(getattr(self.bm, "exhale_durations"))
+            if getattr(self.bm, "exhale_durations", None) is not None
+            else None
+        )
+        exhale_volumes = (
+            _as_float_array(getattr(self.bm, "exhale_volumes"))
+            if getattr(self.bm, "exhale_volumes", None) is not None
+            else None
+        )
 
         onset = _safe_int(exhale_onsets[i]) if _finite(exhale_onsets[i]) else 0
 
@@ -542,19 +721,22 @@ class BreathEditor:
             end_f = exhale_pause_onsets[i]
         end = _safe_int(end_f) if _finite(end_f) else onset
 
-        exhale_durations[i] = float(max(0, end - onset) / fs)
+        if exhale_durations is not None:
+            exhale_durations[i] = float(max(0, end - onset) / fs)
 
         trough = _safe_int(exhale_troughs[i]) if _finite(exhale_troughs[i]) else onset
-        exhale_time2trough[i] = float(max(0, trough - onset) / fs)
+        if exhale_time2trough is not None:
+            exhale_time2trough[i] = float(max(0, trough - onset) / fs)
 
         lo, hi = sorted((onset, end))
         lo = max(0, lo)
         hi = min(resp.shape[0] - 1, hi)
-        if hi <= lo:
-            exhale_volumes[i] = 0.0
-        else:
-            seg = resp[lo : hi + 1]
-            exhale_volumes[i] = float(np.trapz(seg, dx=1.0 / fs))
+        if exhale_volumes is not None:
+            if hi <= lo:
+                exhale_volumes[i] = 0.0
+            else:
+                seg = resp[lo : hi + 1]
+                exhale_volumes[i] = float(np.trapz(seg, dx=1.0 / fs))
 
     # ----------------------------
     # Undo support
@@ -562,59 +744,68 @@ class BreathEditor:
 
     def _make_undo_record(self, i: int, event: EventType) -> _UndoRecord:
         # event is stored mostly for debugging / future (we restore all the tracked fields anyway)
-        inhale_onsets = self._get_event_array("inhale_onsets")
-        exhale_onsets = self._get_event_array("exhale_onsets")
-        inhale_pause_onsets = self._get_event_array("inhale_pause_onsets")
-        exhale_pause_onsets = self._get_event_array("exhale_pause_onsets")
+        def _event_val(name: str) -> float:
+            if not self._supports(name) or getattr(self.bm, name, None) is None:
+                return float(MISSING_EVENT)
+            arr = self._get_event_array(name)
+            if i >= arr.shape[0]:
+                return float(MISSING_EVENT)
+            return float(arr[i])
 
-        inhale_time2peak = _as_float_array(getattr(self.bm, "inhale_time2peak"))
-        inhale_durations = _as_float_array(getattr(self.bm, "inhale_durations"))
-        inhale_volumes = _as_float_array(getattr(self.bm, "inhale_volumes"))
-
-        exhale_time2trough = _as_float_array(getattr(self.bm, "exhale_time2trough"))
-        exhale_durations = _as_float_array(getattr(self.bm, "exhale_durations"))
-        exhale_volumes = _as_float_array(getattr(self.bm, "exhale_volumes"))
+        def _float_val(name: str) -> float:
+            if not self._supports(name) or getattr(self.bm, name, None) is None:
+                return float("nan")
+            arr = _as_float_array(getattr(self.bm, name))
+            if i >= arr.shape[0]:
+                return float("nan")
+            return float(arr[i])
 
         return _UndoRecord(
             breath_i=i,
             event=event,
-            old_inhale_onset=float(inhale_onsets[i]),
-            old_exhale_onset=float(exhale_onsets[i]),
-            old_inhale_pause_onset=float(inhale_pause_onsets[i]),
-            old_exhale_pause_onset=float(exhale_pause_onsets[i]),
-            old_inhale_time2peak=float(inhale_time2peak[i]),
-            old_inhale_duration=float(inhale_durations[i]),
-            old_inhale_volume=float(inhale_volumes[i]),
-            old_exhale_time2trough=float(exhale_time2trough[i]),
-            old_exhale_duration=float(exhale_durations[i]),
-            old_exhale_volume=float(exhale_volumes[i]),
+            old_inhale_onset=_event_val("inhale_onsets"),
+            old_exhale_onset=_event_val("exhale_onsets"),
+            old_inhale_pause_onset=_event_val("inhale_pause_onsets"),
+            old_exhale_pause_onset=_event_val("exhale_pause_onsets"),
+            old_inhale_time2peak=_float_val("inhale_time2peak"),
+            old_inhale_duration=_float_val("inhale_durations"),
+            old_inhale_volume=_float_val("inhale_volumes"),
+            old_exhale_time2trough=_float_val("exhale_time2trough"),
+            old_exhale_duration=_float_val("exhale_durations"),
+            old_exhale_volume=_float_val("exhale_volumes"),
         )
 
     def _restore_undo_record(self, rec: _UndoRecord) -> None:
         i = rec.breath_i
 
-        inhale_onsets = self._get_event_array("inhale_onsets")
-        exhale_onsets = self._get_event_array("exhale_onsets")
-        inhale_pause_onsets = self._get_event_array("inhale_pause_onsets")
-        exhale_pause_onsets = self._get_event_array("exhale_pause_onsets")
+        def _restore_event(name: str, value: float) -> None:
+            if not self._supports(name) or getattr(self.bm, name, None) is None:
+                return
+            arr = self._get_event_array(name)
+            if i >= arr.shape[0]:
+                return
+            if np.isfinite(value) and value >= 0:
+                arr[i] = int(value)
+            else:
+                arr[i] = MISSING_EVENT
 
-        inhale_time2peak = _as_float_array(getattr(self.bm, "inhale_time2peak"))
-        inhale_durations = _as_float_array(getattr(self.bm, "inhale_durations"))
-        inhale_volumes = _as_float_array(getattr(self.bm, "inhale_volumes"))
+        def _restore_float(name: str, value: float) -> None:
+            if not self._supports(name) or getattr(self.bm, name, None) is None:
+                return
+            arr = _as_float_array(getattr(self.bm, name))
+            if i >= arr.shape[0]:
+                return
+            arr[i] = value
 
-        exhale_time2trough = _as_float_array(getattr(self.bm, "exhale_time2trough"))
-        exhale_durations = _as_float_array(getattr(self.bm, "exhale_durations"))
-        exhale_volumes = _as_float_array(getattr(self.bm, "exhale_volumes"))
+        _restore_event("inhale_onsets", rec.old_inhale_onset)
+        _restore_event("exhale_onsets", rec.old_exhale_onset)
+        _restore_event("inhale_pause_onsets", rec.old_inhale_pause_onset)
+        _restore_event("exhale_pause_onsets", rec.old_exhale_pause_onset)
 
-        inhale_onsets[i] = int(rec.old_inhale_onset)
-        exhale_onsets[i] = int(rec.old_exhale_onset)
-        inhale_pause_onsets[i] = int(rec.old_inhale_pause_onset)
-        exhale_pause_onsets[i] = int(rec.old_exhale_pause_onset)
+        _restore_float("inhale_time2peak", rec.old_inhale_time2peak)
+        _restore_float("inhale_durations", rec.old_inhale_duration)
+        _restore_float("inhale_volumes", rec.old_inhale_volume)
 
-        inhale_time2peak[i] = rec.old_inhale_time2peak
-        inhale_durations[i] = rec.old_inhale_duration
-        inhale_volumes[i] = rec.old_inhale_volume
-
-        exhale_time2trough[i] = rec.old_exhale_time2trough
-        exhale_durations[i] = rec.old_exhale_duration
-        exhale_volumes[i] = rec.old_exhale_volume
+        _restore_float("exhale_time2trough", rec.old_exhale_time2trough)
+        _restore_float("exhale_durations", rec.old_exhale_duration)
+        _restore_float("exhale_volumes", rec.old_exhale_volume)

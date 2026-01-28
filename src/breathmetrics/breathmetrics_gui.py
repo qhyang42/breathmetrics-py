@@ -50,18 +50,25 @@ FloatArray = NDArray[np.float64]
 # load and verify object
 _REQUIRED_ATTRS = (
     "srate",
-    "bsl_corrected_respiration",
+    "baseline_corrected_respiration",
     "inhale_onsets",
-    "exhale_offsets",
     "exhale_onsets",
-    "inhale_pause_onsets",
-    "exhale_pause_onsets",
 )
 
 _COLOR_INHALE = "#2f77ff"
 _COLOR_INHALE_PAUSE = "#12b8b0"
 _COLOR_EXHALE = "#c9bf2a"
 _COLOR_EXHALE_PAUSE = "#f1f000"
+
+
+def _supports_feature(bm_obj: Any, name: str) -> bool:
+    supports = getattr(bm_obj, "supports", None)
+    if callable(supports):
+        try:
+            return bool(supports(name))
+        except Exception:
+            return False
+    return getattr(bm_obj, name, None) is not None
 
 
 def _validate_bm_obj(bm_obj: Any) -> None:
@@ -75,7 +82,11 @@ def _validate_bm_obj(bm_obj: Any) -> None:
             "  BreathMetricsMainWindow(bm_obj)"
         )
 
-    missing = [a for a in _REQUIRED_ATTRS if not hasattr(bm_obj, a)]
+    missing = [
+        a
+        for a in _REQUIRED_ATTRS
+        if not hasattr(bm_obj, a) or getattr(bm_obj, a) is None
+    ]
     if missing:
         raise ValueError(
             "bm_obj does not look like an initialized/estimated BreathMetrics object.\n"
@@ -427,6 +438,10 @@ class BreathMetricsMainWindow(QMainWindow):
         self.resize(1500, 800)
 
         self.bm = bm_obj
+        self._supports = lambda name: _supports_feature(self.bm, name)
+        self._supports_inhale_pause = self._supports("inhale_pause_onsets")
+        self._supports_exhale_pause = self._supports("exhale_pause_onsets")
+        self._supports_exhale_offsets = self._supports("exhale_offsets")
         self._backup = self._make_backup()
         self.editor = BreathEditor(self.bm)
 
@@ -572,7 +587,8 @@ class BreathMetricsMainWindow(QMainWindow):
         """Refresh table row i from bm (onset/offset/status)."""
         fs = float(self.bm.srate)
         onset_s = float(self.bm.inhale_onsets[i]) / fs
-        offset_s = float(self.bm.exhale_offsets[i]) / fs
+        offsets = self._effective_exhale_offsets()
+        offset_s = float(offsets[i]) / fs if i < offsets.shape[0] else float("nan")
         if onset_s < 0:
             onset_s = float("nan")
         if offset_s < 0:
@@ -675,23 +691,42 @@ class BreathMetricsMainWindow(QMainWindow):
 
         self.card_inhale = FeatureCard("Inhale", _COLOR_INHALE, show_controls=False)
         self.card_inhale_pause = FeatureCard(
-            "Inhale Pause", _COLOR_INHALE_PAUSE, show_controls=True
+            "Inhale Pause",
+            _COLOR_INHALE_PAUSE,
+            show_controls=self._supports_inhale_pause,
         )
         self.card_exhale = FeatureCard("Exhale", _COLOR_EXHALE, show_controls=False)
         self.card_exhale_pause = FeatureCard(
-            "Exhale Pause", _COLOR_EXHALE_PAUSE, show_controls=True
+            "Exhale Pause",
+            _COLOR_EXHALE_PAUSE,
+            show_controls=self._supports_exhale_pause,
         )
 
-        if self.card_inhale_pause.create_btn is not None:
+        self.card_inhale_pause.setEnabled(self._supports_inhale_pause)
+        self.card_exhale_pause.setEnabled(self._supports_exhale_pause)
+
+        if (
+            self.card_inhale_pause.create_btn is not None
+            and self._supports_inhale_pause
+        ):
             self.card_inhale_pause.create_btn.clicked.connect(self._create_inhale_pause)
 
-        if self.card_inhale_pause.remove_btn is not None:
+        if (
+            self.card_inhale_pause.remove_btn is not None
+            and self._supports_inhale_pause
+        ):
             self.card_inhale_pause.remove_btn.clicked.connect(self._remove_inhale_pause)
 
-        if self.card_exhale_pause.create_btn is not None:
+        if (
+            self.card_exhale_pause.create_btn is not None
+            and self._supports_exhale_pause
+        ):
             self.card_exhale_pause.create_btn.clicked.connect(self._create_exhale_pause)
 
-        if self.card_exhale_pause.remove_btn is not None:
+        if (
+            self.card_exhale_pause.remove_btn is not None
+            and self._supports_exhale_pause
+        ):
             self.card_exhale_pause.remove_btn.clicked.connect(self._remove_exhale_pause)
 
         cards.addWidget(self.card_inhale, 0, 0)
@@ -811,11 +846,19 @@ class BreathMetricsMainWindow(QMainWindow):
         ]
         backup: dict[str, np.ndarray] = {}
         for k in keys:
-            if hasattr(self.bm, k):
-                backup[k] = np.copy(getattr(self.bm, k))
+            if not hasattr(self.bm, k):
+                continue
+            if k != "is_valid" and not self._supports(k):
+                continue
+            val = getattr(self.bm, k)
+            if val is None:
+                continue
+            backup[k] = np.copy(val)
         return backup
 
     def _create_inhale_pause(self) -> None:
+        if not self._supports_inhale_pause:
+            return
         i = self.current_idx
         fs = float(self.bm.srate)
         target = int(round(float(self.bm.exhale_onsets[i]) - (0.5 * fs)))
@@ -823,9 +866,13 @@ class BreathMetricsMainWindow(QMainWindow):
         self._select_breath(i)
 
     def _remove_inhale_pause(self) -> None:
+        if not self._supports_inhale_pause:
+            return
         i = self.current_idx
         # TODO: add BreathEditor.clear_event(...) for purity
         self.bm.inhale_pause_onsets[i] = MISSING_EVENT
+        if hasattr(self.bm, "statuses"):
+            self.bm.statuses["inhale_pause_onsets"] = "edited"
         # recompute inhale-dependent stuff:
         self.editor.move_event(
             i, EventType.INHALE_ONSET, int(round(float(self.bm.inhale_onsets[i])))
@@ -833,6 +880,8 @@ class BreathMetricsMainWindow(QMainWindow):
         self._select_breath(i)
 
     def _create_exhale_pause(self) -> None:
+        if not self._supports_exhale_pause or not self._supports_exhale_offsets:
+            return
         i = self.current_idx
         fs = float(self.bm.srate)
         target = int(round(float(self.bm.exhale_offsets[i]) - (0.5 * fs)))
@@ -840,9 +889,13 @@ class BreathMetricsMainWindow(QMainWindow):
         self._select_breath(i)
 
     def _remove_exhale_pause(self) -> None:
+        if not self._supports_exhale_pause:
+            return
         i = self.current_idx
         # TODO: add BreathEditor.clear_event(...) for purity
         self.bm.exhale_pause_onsets[i] = MISSING_EVENT
+        if hasattr(self.bm, "statuses"):
+            self.bm.statuses["exhale_pause_onsets"] = "edited"
         # recompute exhale-dependent stuff:
         self.editor.move_event(
             i, EventType.EXHALE_ONSET, int(round(float(self.bm.exhale_onsets[i])))
@@ -853,16 +906,26 @@ class BreathMetricsMainWindow(QMainWindow):
     # real BreathMetrics data extraction
     # ----------------------------
 
+    def _effective_exhale_offsets(self) -> np.ndarray:
+        if (
+            self._supports_exhale_offsets
+            and getattr(self.bm, "exhale_offsets", None) is not None
+        ):
+            return np.asarray(self.bm.exhale_offsets, dtype=float)
+        inhale_onsets = np.asarray(self.bm.inhale_onsets, dtype=float)
+        offsets = np.full_like(inhale_onsets, MISSING_EVENT, dtype=float)
+        if inhale_onsets.size > 1:
+            offsets[:-1] = inhale_onsets[1:]
+        return offsets
+
     def _make_rows_from_bm(self) -> list[BreathRow]:
         fs = float(self.bm.srate)
         inhale_onsets = np.asarray(self.bm.inhale_onsets, dtype=float)
-        exhale_offsets = np.asarray(self.bm.exhale_offsets, dtype=float)
-
+        exhale_offsets = self._effective_exhale_offsets()
         n = inhale_onsets.shape[0]
         if exhale_offsets.shape[0] < n:
             pad = np.full(n - exhale_offsets.shape[0], MISSING_EVENT, dtype=float)
             exhale_offsets = np.concatenate([exhale_offsets, pad])
-            self.bm.exhale_offsets = exhale_offsets.astype(int)
 
         # is_valid stored/attached by BreathEditor; default valid if missing
         is_valid = getattr(self.bm, "is_valid", None)
@@ -895,7 +958,7 @@ class BreathMetricsMainWindow(QMainWindow):
 
         # breath window definition per your spec:
         inhale_onsets = self.bm.inhale_onsets
-        exhale_offsets = self.bm.exhale_offsets
+        exhale_offsets = self._effective_exhale_offsets()
         if idx >= len(inhale_onsets):
             return BreathViewState(
                 breath_index=idx,
@@ -912,7 +975,7 @@ class BreathMetricsMainWindow(QMainWindow):
         if end < start:
             end = start
 
-        y_all = np.asarray(self.bm.bsl_corrected_respiration, dtype=np.float64)
+        y_all = np.asarray(self.bm.baseline_corrected_respiration, dtype=np.float64)
 
         # add padding for context
         pad = int(round(1.0 * fs))
@@ -935,8 +998,18 @@ class BreathMetricsMainWindow(QMainWindow):
 
         inhale_t = s_to_sec(self.bm.inhale_onsets, idx)
         exhale_t = s_to_sec(self.bm.exhale_onsets, idx)
-        inhale_pause_t = s_to_sec(self.bm.inhale_pause_onsets, idx)
-        exhale_pause_t = s_to_sec(self.bm.exhale_pause_onsets, idx)
+        inhale_pause_t = (
+            s_to_sec(self.bm.inhale_pause_onsets, idx)
+            if self._supports_inhale_pause
+            and getattr(self.bm, "inhale_pause_onsets", None) is not None
+            else None
+        )
+        exhale_pause_t = (
+            s_to_sec(self.bm.exhale_pause_onsets, idx)
+            if self._supports_exhale_pause
+            and getattr(self.bm, "exhale_pause_onsets", None) is not None
+            else None
+        )
 
         is_valid = getattr(self.bm, "is_valid", None)
         status = "valid"

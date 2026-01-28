@@ -9,9 +9,30 @@ MISSING_EVENT = -1
 
 def normalize_event_array(arr: ArrayLike) -> np.ndarray:
     a = np.asarray(arr)
+    if a.size == 0:
+        return a.astype(int)
+    if a.dtype.kind == "O":
+        cleaned = []
+        for v in a:
+            if v is None:
+                cleaned.append(float(MISSING_EVENT))
+                continue
+            try:
+                fv = float(v)
+            except (TypeError, ValueError):
+                cleaned.append(float(MISSING_EVENT))
+                continue
+            if not np.isfinite(fv):
+                fv = float(MISSING_EVENT)
+            cleaned.append(fv)
+        a = np.asarray(cleaned, dtype=float)
     if np.issubdtype(a.dtype, np.floating):
-        a = np.nan_to_num(a, nan=MISSING_EVENT)
-    return a.astype(int)
+        a = np.nan_to_num(
+            a, nan=MISSING_EVENT, posinf=MISSING_EVENT, neginf=MISSING_EVENT
+        )
+    a = a.astype(int, copy=False)
+    a[a < 0] = MISSING_EVENT
+    return a
 
 
 def event_is_valid(x: int | float) -> bool:

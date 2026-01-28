@@ -53,7 +53,9 @@ def plot_resp_features(bm, annotate: None, sizedata: float = 36):
             continue
         params_to_plot.append(arr)
         param_labels.append(label)
-    resptrace = bm.bsl_corrected_respiration
+    resptrace = getattr(bm, "baseline_corrected_respiration", None)
+    if resptrace is None:
+        resptrace = getattr(bm, "bsl_corrected_respiration")
     xaxis = bm.time
 
     # Create plot
