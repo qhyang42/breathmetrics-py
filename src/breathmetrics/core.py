@@ -107,6 +107,11 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
             print(
                 "Notice: Only certain features can be derived from rodent thermocouple data"
             )
+        elif (
+            self.datatype == "rodentAirflow"
+        ):  # gets the same features as human airflow
+            smoothwin = 10
+
         else:
             smoothwin = 50  # TODO this is not quite right. if datatype is illegal, give warning and quit?
 
@@ -129,7 +134,7 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
     def find_extrema(self):
         self.inhale_peaks, self.exhale_troughs = (
             breathmetrics.kernel_primary.find_respiratory_extrema(
-                self.bsl_corrected_respiration, self.srate
+                self.bsl_corrected_respiration, self.srate, datatype=self.datatype
             )
         )
 

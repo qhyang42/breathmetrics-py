@@ -43,6 +43,7 @@ def find_respiratory_extrema(
     srate: float,
     custom_decision_threshold: int = 0,
     sw_sizes: list[int] | None = None,
+    datatype: str | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Find peaks and troughs in respiratory data using a sliding-window voting scheme.
@@ -58,6 +59,9 @@ def find_respiratory_extrema(
     sw_sizes : list[int] | None
         Sliding-window sizes (in samples). If None, defaults to:
         floor([100, 300, 700, 1000, 5000] * (srate/1000)).
+    datatype : str | None
+        If provided and in {"rodentAirflow", "rodentThermocouple"}, uses
+        rodent window sizes: floor([5, 10, 20, 50] * (srate/1000)).
 
     Returns
     -------
@@ -74,13 +78,21 @@ def find_respiratory_extrema(
     # Default window sizes (ms → samples), as in the MATLAB code
     if sw_sizes is None:
         srate_adjust = float(srate) / 1000.0
-        sw_sizes = [
-            int(np.floor(100 * srate_adjust)),
-            int(np.floor(300 * srate_adjust)),
-            int(np.floor(700 * srate_adjust)),
-            int(np.floor(1000 * srate_adjust)),
-            int(np.floor(5000 * srate_adjust)),
-        ]
+        if datatype in {"rodentAirflow", "rodentThermocouple"}:
+            sw_sizes = [
+                int(np.floor(5 * srate_adjust)),
+                int(np.floor(10 * srate_adjust)),
+                int(np.floor(20 * srate_adjust)),
+                int(np.floor(50 * srate_adjust)),
+            ]
+        else:
+            sw_sizes = [
+                int(np.floor(100 * srate_adjust)),
+                int(np.floor(300 * srate_adjust)),
+                int(np.floor(700 * srate_adjust)),
+                int(np.floor(1000 * srate_adjust)),
+                int(np.floor(5000 * srate_adjust)),
+            ]
     sw_sizes = [max(1, int(w)) for w in sw_sizes]
 
     # Pad by reflecting the tail so large windows don't miss the end
