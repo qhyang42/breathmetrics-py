@@ -30,7 +30,7 @@ print(
 
 
 # %%
-bmobj.estimate_all_features(verbose=True, compute_secondary=False)
+bmobj.estimate_all_features(verbose=True, compute_secondary=True)
 print("complete:", bmobj.feature_estimations_complete)
 
 # %% GUI launch test

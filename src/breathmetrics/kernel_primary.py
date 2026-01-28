@@ -469,7 +469,6 @@ def find_time_to_peak_trough(
     return inhale_time2peak, exhale_time2trough
 
 
-## calculate secondary features
 ## create resp ERPs
 def create_respiratory_erp_matrix(
     resp: np.ndarray,

@@ -13,17 +13,14 @@
 1/12/2026 add new onset detection method from Adam. Not tested. 
 1/14/2026 all primary feature debug complete. (they run at least)
 1/24/2026 primary workflow complete. 
+1/27/2026 adapted for all data type. ERP method added. 
 
-  TODOs as of 1/24/2026: 
-  1. GUI edit methods linking not tested. 
-        Done. 
-  2. GUI fine tuning 
-      ADD pause dots to the plot 
+  TODOs: 
 
-  3. test/integrate secondary features 
-  4. plotting code. (never tested with real data. maybe change some of them?). Add method to pull pretty summary plot? 
-  5. CLI (for terminal/HPC something like `breathmetrics estimate resp.csv --fs 1000 --datatype humanAirflow`). 
-
+  1. plotting code. (never tested with real data. maybe change some of them?). Add method to pull pretty summary plot? 
+  2. CLI (for terminal/HPC something like `breathmetrics estimate resp.csv --fs 1000 --datatype humanAirflow`).
+  3. add window feature pipeline  
+  4. GUI finetuning 
 
 
 # pipeline from orig breathmetrics toolbox: 

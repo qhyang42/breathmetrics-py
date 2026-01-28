@@ -716,9 +716,74 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
         return summary
 
     ## ERPS
-    def compute_erp(self):
-        # check how the matlab toolbox handle this.
-        return None
+    def compute_erp(
+        self,
+        event_array: ArrayLike | None = None,
+        *,
+        pre_s: float = 1.0,
+        post_s: float = 1.0,
+        append_nans: bool = False,
+        verbose: bool = True,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Compute an ERP-like matrix aligned to respiratory events.
+
+        Parameters
+        ----------
+        event_array : array-like | None
+            Event indices (sample indices) to align to. If None, uses inhale_onsets.
+        pre_s : float
+            Seconds before each event to include.
+        post_s : float
+            Seconds after each event to include.
+        append_nans : bool
+            If True, pad out-of-bounds segments with NaN instead of rejecting.
+        verbose : bool
+            If True, prints details for rejected events.
+        """
+        if self.baseline_corrected_respiration is None:
+            raise ValueError("baseline_corrected_respiration is missing.")
+        if event_array is None:
+            if self.inhale_onsets is None:
+                raise ValueError("event_array is None and inhale_onsets is missing.")
+            event_array = self.inhale_onsets
+
+        pre_samples = int(round(float(pre_s) * float(self.srate)))
+        post_samples = int(round(float(post_s) * float(self.srate)))
+        if pre_samples < 0 or post_samples < 0:
+            raise ValueError("pre_s and post_s must be non-negative.")
+
+        (
+            ERPMatrix,
+            trial_events,
+            rejected_events,
+            trial_event_inds,
+            rejected_event_inds,
+        ) = breathmetrics.kernel_primary.create_respiratory_erp_matrix(
+            self.baseline_corrected_respiration,
+            np.asarray(event_array),
+            pre_samples,
+            post_samples,
+            append_nans=append_nans,
+            verbose=verbose,
+        )
+
+        self.ERPMatrix = ERPMatrix
+        self.ERPxAxis = np.arange(-pre_samples, post_samples + 1, dtype=float) / float(
+            self.srate
+        )
+        self.ERPtrialEvents = trial_events
+        self.ERPrejectedEvents = rejected_events
+        self.ERPtrialEventInds = trial_event_inds
+        self.ERPrejectedEventInds = rejected_event_inds
+
+        return (
+            ERPMatrix,
+            trial_events,
+            rejected_events,
+            trial_event_inds,
+            rejected_event_inds,
+        )
 
     ## esitmate all features. call all methods in order.
     def estimate_all_features(
