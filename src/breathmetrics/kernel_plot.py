@@ -508,3 +508,6 @@ def plot_breathing_compositions(
     plt.tight_layout()
     plt.show()
     return fig, axes
+
+
+## original breathmetrics toolbox contains plotERP method. not used in demos. skip for now.

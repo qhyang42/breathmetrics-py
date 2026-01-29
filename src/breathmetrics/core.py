@@ -9,6 +9,7 @@ from numpy.typing import ArrayLike, NDArray
 # import breathmetrics.kernel
 # import breathmetrics.kernel_onset_detection_methods
 import breathmetrics.kernel_onset_detection_methods
+import breathmetrics.kernel_plot
 import breathmetrics.kernel_primary
 import breathmetrics.utils
 
@@ -781,6 +782,41 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
             rejected_events,
             trial_event_inds,
             rejected_event_inds,
+        )
+
+    ### plotting methods
+    def plot_features(
+        self,
+        *,
+        annotate: list[str] | None = None,
+        size_data: int = 36,
+        backend: str = "qt",
+    ):
+        return breathmetrics.kernel_plot.plot_respiratory_features(
+            self,
+            annotate=annotate,
+            size_data=size_data,
+            backend=backend,
+        )
+
+    def plot_compositions_raw(self, *, matrix_size: int = 1000):
+        return breathmetrics.kernel_plot.plot_breathing_compositions(
+            self, "raw", matrix_size=matrix_size
+        )
+
+    def plot_compositions_normalized(self, *, matrix_size: int = 1000):
+        return breathmetrics.kernel_plot.plot_breathing_compositions(
+            self, "normalized", matrix_size=matrix_size
+        )
+
+    def plot_compositions_line(self, *, matrix_size: int = 1000):
+        return breathmetrics.kernel_plot.plot_breathing_compositions(
+            self, "line", matrix_size=matrix_size
+        )
+
+    def plot_compositions_hist(self, *, matrix_size: int = 1000):
+        return breathmetrics.kernel_plot.plot_breathing_compositions(
+            self, "hist", matrix_size=matrix_size
         )
 
     ## esitmate all features. call all methods in order.
