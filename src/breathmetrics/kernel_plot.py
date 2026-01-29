@@ -2,522 +2,509 @@
 from __future__ import annotations
 import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sns
+
+# import seaborn as sns
 from matplotlib.colors import ListedColormap
-from matplotlib.lines import Line2D  # ✅ import this explicitly
+
+# from matplotlib.lines import Line2D  # ✅ import this explicitly
+from matplotlib.patches import Patch
+from typing import Literal
 
 
-def plot_resp_features(bm, annotate: None, sizedata: float = 36):
+def plot_respiratory_features(
+    bm,
+    annotate=None,
+    size_data=36,
+    backend="qt",
+):
     """
-    plots respiration signal with esitmated features
-    parameters:
-    bm: breathmetrics object
-    annotate: features to plot. options are "extrema", "onsets", "pauses", "maxflow", "volumes"
-    sizedata: size of the feature labels. helpful for visualizing features in data of different window sizes
+    Plot respiration and estimated respiratory features in an interactive
+    matplotlib window (MATLAB-like).
+
+    Parameters
+    ----------
+    bm : BreathMetrics-like object
+        Must expose:
+        - bm.time
+        - bm.which_resp()
+        - feature index arrays (inhale_peaks, exhale_troughs, etc.)
+        - bm.datatype
+    annotate : list[str] or None
+        Any of: 'extrema', 'onsets', 'maxflow', 'volumes', 'pauses'
+    size_data : int
+        Marker size for scatter points.
+    backend : {'qt', 'widget'}
+        'qt' -> launches OS-level interactive window (MATLAB-like)
+        'widget' -> notebook-embedded interactive plot
     """
 
-    # plot all paramters that have been calculated
-    # Build parameters and labels to plot
+    # --- force interactive backend BEFORE pyplot import ---
+    import matplotlib
+
+    if backend == "qt":
+        matplotlib.use("QtAgg", force=True)
+    elif backend == "widget":
+        matplotlib.use("module://ipympl.backend_nbagg", force=True)
+    else:
+        raise ValueError("backend must be 'qt' or 'widget'")
+
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    if annotate is None:
+        annotate = []
+
+    # -----------------------------------------------------
+    # collect parameters to plot
     params_to_plot = []
     param_labels = []
 
-    dtype = getattr(bm, "datatype", getattr(bm, "dataType", None))
-    is_airflow = dtype in {"humanAirflow", "rodentAirflow"}
-
-    def _get_array(name):
-        arr = getattr(bm, name, None)
-        if arr is None:
-            return None
-        arr = np.asarray(arr)
-        return arr if arr.size > 0 else None
-
-    # Define parameter logic
-    specs = [
-        ("inhalePeaks", "Inhale Peaks", lambda: is_airflow, lambda a: a),
-        ("exhaleTroughs", "Exhale Troughs", lambda: is_airflow, lambda a: a),
-        ("inhaleOnsets", "Inhale Onsets", lambda: True, lambda a: a),
-        ("exhaleOnsets", "Exhale Onsets", lambda: True, lambda a: a),
-        ("inhalePauseOnsets", "Inhale Pauses", lambda: True, lambda a: a[a > 0]),
-        ("exhalePauseOnsets", "Exhale Pauses", lambda: True, lambda a: a[a > 0]),
-    ]
-
-    # Collect data to plot
-    for attr, label, include_ok, transform in specs:
-        if not include_ok():
-            continue
-        arr = _get_array(attr)
-        if arr is None:
-            continue
-        arr = transform(arr)
-        if arr is None or (hasattr(arr, "size") and arr.size == 0):
-            continue
-        params_to_plot.append(arr)
+    def _add(param, label, airflow_only=False):
+        if param is None or len(param) == 0:
+            return
+        if airflow_only and bm.datatype not in ("humanAirflow", "rodentAirflow"):
+            return
+        params_to_plot.append(np.asarray(param, dtype=int))
         param_labels.append(label)
-    resptrace = getattr(bm, "baseline_corrected_respiration", None)
-    if resptrace is None:
-        resptrace = getattr(bm, "bsl_corrected_respiration")
-    xaxis = bm.time
 
-    # Create plot
-    plt.figure(figsize=(12, 6))
-    plt.title("esitmated respiratory features")
-    plt.plot(xaxis, resptrace, label="Respiration Signal", color="black", linestyle="-")
-    plt.xlabel("time (s)")
+    _add(bm.inhale_peaks, "Inhale Peaks", airflow_only=True)
+    _add(bm.exhale_troughs, "Exhale Troughs", airflow_only=True)
+    _add(bm.inhale_onsets, "Inhale Onsets")
+    _add(bm.exhale_onsets, "Exhale Onsets")
 
-    # different data types have different y axis labels
-    if is_airflow:
-        plt.ylabel("Airflow (arb. units)")
-    elif dtype == "humanBB":
-        plt.ylabel("Breathing Belt Signal (arb. units)")
-    elif dtype == "rodentThermocouple":
-        plt.ylabel("Thermocouple Signal (arb. units)")
+    if hasattr(bm, "inhale_pause_onsets"):
+        _add(bm.inhale_pause_onsets[bm.inhale_pause_onsets > 0], "Inhale Pauses")
+    if hasattr(bm, "exhale_pause_onsets"):
+        _add(bm.exhale_pause_onsets[bm.exhale_pause_onsets > 0], "Exhale Pauses")
 
-    # Choose a qualitative palette (muted, colorblind, deep, bright, etc.)
-    palette = sns.color_palette("colorblind", n_colors=6)
+    # -----------------------------------------------------
+    # main plot
+    x = bm.time
+    y = bm.baseline_corrected_respiration
 
-    # Fixed mapping for each parameter label
-    LABEL_COLOR = {
-        "Inhale Peaks": palette[0],
-        "Exhale Troughs": palette[1],
-        "Inhale Onsets": palette[2],
-        "Exhale Onsets": palette[3],
-        "Inhale Pauses": palette[4],
-        "Exhale Pauses": palette[5],
-    }
+    fig, ax = plt.subplots(figsize=(12, 4))
+    manager = getattr(fig.canvas, "manager", None)
+    if manager is not None and hasattr(manager, "set_window_title"):
+        manager.set_window_title("Estimated Respiratory Features")
 
-    def color_for(label: str, i_fallback: int) -> tuple[float, float, float]:
-        return LABEL_COLOR.get(label, palette[i_fallback % len(palette)])
+    (line,) = ax.plot(x, y, color="black", lw=1)
+    handles = [line]
+    labels = ["Respiration"]
 
-    # Plot each feature. TODO: continue here. add color.
+    ax.set_xlabel("Time (seconds)")
+
+    if bm.datatype in ("humanAirflow", "rodentAirflow"):
+        ax.set_ylabel("Airflow (AU)")
+    elif bm.datatype == "humanBB":
+        ax.set_ylabel("Breathing Belt (AU)")
+    elif bm.datatype == "rodentThermocouple":
+        ax.set_ylabel("Thermocouple (AU)")
+
+    # -----------------------------------------------------
+    # scatter features
     if params_to_plot:
-        for i, param in enumerate(params_to_plot):
-            lbl = param_labels[i]
-            plt.scatter(
-                xaxis[param],
-                resptrace[param],
-                s=sizedata,
-                label=lbl,
-                alpha=0.7,
-                color=color_for(lbl, i),
+        colors = [
+            "#4C72B0",  # Inhale Peaks   (muted blue)
+            "#DD8452",  # Exhale Troughs (muted orange)
+            "#55A868",  # Inhale Onsets  (muted green)
+            "#C44E52",  # Exhale Onsets  (muted red)
+            "#8172B3",  # Inhale Pauses  (muted purple)
+            "#937860",  # Exhale Pauses  (muted brown)
+        ]  # TODO this is distinct enough at lease. change if think of anything better
+
+        for param, label, color in zip(params_to_plot, param_labels, colors):
+            valid = (param > 0) & (param < len(x))
+            idx = param[valid]
+
+            sc = ax.scatter(
+                x[idx],
+                y[idx],
+                s=size_data,
+                color=color,
+                edgecolor=color,
+                zorder=3,
+                label=label,
             )
-    plt.legend()
-    plt.show()
+            handles.append(sc)  # type: ignore[arg-type]
+            labels.append(label)
 
-    # TODO: add code to plot annotations. annotation from the GUI?
-    # TODO: test plotting
+    ax.legend(handles, labels, loc="best")
+
+    # -----------------------------------------------------
+    # annotations
+    def _annotate(indices, strings):
+        for i, txt in zip(indices, strings):
+            ax.text(x[i], y[i], txt, fontsize=9)
+
+    if "extrema" in annotate:
+        if bm.inhale_peaks is not None:
+            _annotate(
+                bm.inhale_peaks,
+                [f"Peak @ {x[i]:.1f}" for i in bm.inhale_peaks],
+            )
+        if bm.exhale_troughs is not None:
+            _annotate(
+                bm.exhale_troughs,
+                [f"Trough @ {x[i]:.1f}" for i in bm.exhale_troughs],
+            )
+
+    if "onsets" in annotate:
+        _annotate(
+            bm.inhale_onsets,
+            [f"Inhale @ {x[i]:.1f}" for i in bm.inhale_onsets],
+        )
+        _annotate(
+            bm.exhale_onsets,
+            [f"Exhale @ {x[i]:.1f}" for i in bm.exhale_onsets],
+        )
+
+    if "pauses" in annotate:
+        if hasattr(bm, "inhale_pause_onsets"):
+            real = bm.inhale_pause_onsets[bm.inhale_pause_onsets > 0]
+            _annotate(
+                real,
+                [f"Inhale pause @ {x[i]:.1f}" for i in real],
+            )
+        if hasattr(bm, "exhale_pause_onsets"):
+            real = bm.exhale_pause_onsets[bm.exhale_pause_onsets > 0]
+            _annotate(
+                real,
+                [f"Exhale pause @ {x[i]:.1f}" for i in real],
+            )
+
+    plt.tight_layout()
+    plt.show(block=True)
+
+    return fig
 
 
-def plot_breathing_compositions(bm, plottype: str):
+def plot_breathing_compositions(
+    bm,
+    plottype: Literal["raw", "normalized", "line", "hist"],
+    *,
+    matrix_size: int = 1000,
+):
     """
-    plots the composition of all breaths in bm object
-    use after all features have been calculated
-    parameters:
-    bm: breathmetrics object
-    plottype: 'raw', 'normalized', 'line', 'hist'
+    Plot the composition of breaths in a BreathMetrics-like object.
+
+    plottype:
+      - 'raw'        : durations scaled to max breath period (pads background)
+      - 'normalized' : each breath stretched to fill matrix_size columns (proportions)
+      - 'line'       : per-breath phase-duration traces + mean±std (NaNs excluded)
+      - 'hist'       : histograms of phase durations (NaNs excluded)
+
+    Notes on NaNs
+    -------------
+    Pause durations are allowed to be np.nan (meaning: pause absent/undefined).
+    - For composition images ('raw', 'normalized'): NaNs are treated as 0 for rendering.
+    - For 'line' and 'hist': NaNs are treated as missing and excluded from stats/hist.
     """
-    matrix_size = 1000
-    breath_phase_labels = ["inhale", "exhale", "inhale_pause", "exhale_pause"]  # keep
-    custom_colors = np.array(  # keep
-        [
-            [0.0000, 0.4470, 0.7410],  # blue
-            [0.8500, 0.3250, 0.0980],  # orange
-            [0.9290, 0.6940, 0.1250],  # yellow
-            [0.4940, 0.1840, 0.5560],  # purple
-            [1.0000, 1.0000, 1.0000],  # white (used in 'raw' background)
-        ]
-    )
-    onsets = getattr(bm, "inhale_onsets", None)
-    if onsets is None:
-        raise ValueError("Estimated features before plotting breath compositions.")
-    n_breaths = len(onsets)
+    inhale_onsets = getattr(bm, "inhale_onsets", None)
+    if inhale_onsets is None:
+        raise ValueError(
+            "bm.inhale_onsets is required. Estimate features before plotting."
+        )
+    inhale_onsets = np.asarray(inhale_onsets)
+    if inhale_onsets.size == 0:
+        raise ValueError("No breaths found (inhale_onsets is empty).")
 
     if plottype not in {"raw", "normalized", "line", "hist"}:
-        raise ValueError("plottype must be one of 'raw', 'normalized', 'line', 'hist'")
+        raise ValueError("plottype must be one of {'raw','normalized','line','hist'}.")
 
-    match plottype:
-        case "normalized":
-            breath_matrix = np.zeros((n_breaths, matrix_size))
-            for b in range(n_breaths):
-                ind = 1
-                this_breath_comp = np.zeros(matrix_size)
-                this_inhale_dur = bm.inhale_durations[b]
-                this_inhale_pause_dur = bm.exhale_pause_durations[b]
+    # Phase labels and MATLAB-ish colors
+    phase_labels = ["inhale", "inhale_pause", "exhale", "exhale_pause"]
+    phase_colors = np.array(
+        [
+            [0.0000, 0.4470, 0.7410],  # inhale (blue)
+            [0.8500, 0.3250, 0.0980],  # inhale_pause (orange)
+            [0.9290, 0.6940, 0.1250],  # exhale (yellow)
+            [0.4940, 0.1840, 0.5560],  # exhale_pause (purple)
+        ],
+        dtype=float,
+    )
+    bg_color = np.array([[1.0, 1.0, 1.0]], dtype=float)
 
-                if np.isnan(this_inhale_pause_dur):
-                    this_inhale_pause_dur = 0
+    def _as_float(name: str, default=None) -> np.ndarray:
+        arr = getattr(bm, name, default)
+        if arr is None:
+            raise ValueError(f"bm.{name} is required for plottype='{plottype}'.")
+        return np.asarray(arr, dtype=float)
 
-                this_exhale_dur = bm.exhale_durations[b]
-                this_exhale_pause_dur = bm.inhale_pause_durations[b]
-                if np.isnan(this_exhale_dur):
-                    this_exhale_dur = 0
-                if np.isnan(this_exhale_pause_dur):
-                    this_exhale_pause_dur = 0
+    # Raw arrays: keep NaNs (pause missing)
+    inh = _as_float("inhale_durations")
+    exh = _as_float("exhale_durations")
+    inhp = _as_float("inhale_pause_durations", default=np.full_like(inh, np.nan))
+    exhp = _as_float("exhale_pause_durations", default=np.full_like(inh, np.nan))
 
-                total_points = np.sum(
-                    [
-                        this_inhale_dur,
-                        this_inhale_pause_dur,
-                        this_exhale_dur,
-                        this_exhale_pause_dur,
-                    ]
-                )
-                normed_inhale_dur = int((this_inhale_dur / total_points) * matrix_size)
-                normed_inhale_pause_dur = int(
-                    (this_inhale_pause_dur / total_points) * matrix_size
-                )
-                normed_exhale_dur = int((this_exhale_dur / total_points) * matrix_size)
-                normed_exhale_pause_dur = int(
-                    (this_exhale_pause_dur / total_points) * matrix_size
-                )
+    # Clamp to common length
+    n_breaths = int(min(inh.size, exh.size, inhp.size, exhp.size, inhale_onsets.size))
+    inh, exh, inhp, exhp = (
+        inh[:n_breaths],
+        exh[:n_breaths],
+        inhp[:n_breaths],
+        exhp[:n_breaths],
+    )
 
-                # sum check
-                sum_check = np.sum(
-                    [
-                        normed_exhale_dur,
-                        normed_inhale_dur,
-                        normed_exhale_pause_dur,
-                        normed_inhale_pause_dur,
-                    ]
-                )
-                if sum_check < matrix_size:
-                    normed_exhale_dur += 1
-                elif sum_check > matrix_size:
-                    normed_exhale_dur -= 1
+    def _nan_to_zero(x: np.ndarray) -> np.ndarray:
+        # for rendering compositions only
+        return np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
 
-                this_breath_comp[1 : ind + normed_inhale_dur] = 1  # inhale
-                ind = normed_inhale_dur
-                if normed_inhale_pause_dur > 0:
-                    this_breath_comp[ind + 1 : ind + normed_inhale_pause_dur] = (
-                        2  # inhale pause
-                    )
-                    ind += normed_inhale_pause_dur
-                this_breath_comp[ind + 1 : ind + normed_exhale_dur] = 3  # exhale
-                ind += normed_exhale_dur
-                if normed_exhale_pause_dur > 0:
-                    this_breath_comp[ind + 1 : ind + normed_exhale_pause_dur] = (
-                        4  # exhale pause
-                    )
-                breath_matrix[b, :] = this_breath_comp
+    def _allocate_by_largest_remainder(weights: np.ndarray, total: int) -> np.ndarray:
+        """Convert nonnegative weights to integer counts summing to `total`."""
+        w = np.clip(weights.astype(float), 0.0, np.inf)
+        s = w.sum()
+        if s <= 0:
+            out = np.zeros_like(w, dtype=int)
+            out[0] = total  # fallback: all inhale
+            return out
 
-            fig, ax = plt.subplots(figsize=(10, 5))
+        exact = w / s * total
+        base = np.floor(exact).astype(int)
+        leftover = total - int(base.sum())
+        if leftover > 0:
+            remainders = exact - np.floor(exact)
+            add_idx = np.argsort(remainders)[::-1][:leftover]
+            base[add_idx] += 1
+        elif leftover < 0:
+            take = -leftover
+            for idx in np.argsort(base)[::-1]:
+                if take == 0:
+                    break
+                if base[idx] > 0:
+                    base[idx] -= 1
+                    take -= 1
+        return base
 
-            # --- image ---
-            cmap = ListedColormap(
-                custom_colors[:4, :]
-            )  # same as MATLAB colormap(customColors(1:4,:))
-            _im = ax.imshow(
-                breath_matrix,
-                aspect="auto",
-                interpolation="nearest",
-                cmap=cmap,
-                origin="upper",
+    if plottype == "normalized":
+        # For compositions: treat missing pauses as 0
+        inh_z, inhp_z, exh_z, exhp_z = map(_nan_to_zero, (inh, inhp, exh, exhp))
+
+        comp = np.zeros((n_breaths, matrix_size), dtype=np.uint8)  # codes 0..3
+        for b in range(n_breaths):
+            counts = _allocate_by_largest_remainder(
+                np.array([inh_z[b], inhp_z[b], exh_z[b], exhp_z[b]], dtype=float),
+                total=matrix_size,
             )
+            i_inh, i_inhp, i_exh, i_exhp = counts.tolist()
 
-            # x-axis limits
-            ax.set_xlim(0.5, matrix_size + 0.5)
+            row = np.empty(matrix_size, dtype=np.uint8)
+            pos = 0
+            row[pos : pos + i_inh] = 0
+            pos += i_inh
+            if i_inhp > 0:
+                row[pos : pos + i_inhp] = 1
+                pos += i_inhp
+            row[pos : pos + i_exh] = 2
+            pos += i_exh
+            if i_exhp > 0:
+                row[pos : pos + i_exhp] = 3
+            comp[b, :] = row
 
-            # --- normalize x ticks to percentages ---
-            x_ticks = np.linspace(1, matrix_size, 11)
-            x_tick_labels = [f"{int(round(x / matrix_size * 100))}%" for x in x_ticks]
-            ax.set_xticks(x_ticks)
-            ax.set_xticklabels(x_tick_labels)
+        fig, ax = plt.subplots(figsize=(10, 5))
+        cmap = ListedColormap(phase_colors, name="breath_phases_norm")
+        ax.imshow(
+            comp, aspect="auto", interpolation="nearest", cmap=cmap, origin="upper"
+        )
 
-            # y limits
-            ax.set_ylim(0.5, n_breaths + 0.5)
+        x_ticks = np.linspace(0, matrix_size, 11)
+        ax.set_xticks(x_ticks)
+        ax.set_xticklabels([f"{int(round(x / matrix_size * 100))}%" for x in x_ticks])
 
-            # labels
-            ax.set_xlabel("Proportion of Breathing Period")
-            ax.set_ylabel("Breath Number")
+        ax.set_xlabel("Proportion of Breathing Period")
+        ax.set_ylabel("Breath Number")
+        ax.set_title("Breath Composition (Normalized)")
 
-            # --- custom legend with dummy line handles ---
-            handles = [
-                Line2D([], [], color=custom_colors[i], linewidth=2) for i in range(4)
-            ]
-            ax.legend(handles, breath_phase_labels)
+        legend_handles = [
+            Patch(facecolor=phase_colors[i], edgecolor="none") for i in range(4)
+        ]
+        ax.legend(legend_handles, phase_labels, loc="upper right", frameon=False)
 
-            plt.tight_layout()
-            plt.show()
+        plt.tight_layout()
+        plt.show()
+        return fig, ax
 
-            ## TODO: test this with real data but at least there is no syntax error now
-        case "raw":
-            MATRIX_SIZE = 1000
-            nBreaths = len(bm.inhaleOnsets)
+    if plottype == "raw":
+        # For compositions: treat missing pauses as 0
+        inh_z, inhp_z, exh_z, exhp_z = map(_nan_to_zero, (inh, inhp, exh, exhp))
 
-            # Compute maximum breath duration in seconds
-            if len(bm.inhaleOnsets) >= 2:
-                maxBreathSize = np.ceil(np.max(np.diff(bm.inhaleOnsets)) / bm.srate)
+        srate = float(getattr(bm, "srate", 1.0))
+        if inhale_onsets.size >= 2:
+            max_breath_sec = float(np.ceil(np.max(np.diff(inhale_onsets)) / srate))
+        else:
+            max_breath_sec = 1.0
+
+        comp = np.full((n_breaths, matrix_size), 4, dtype=np.uint8)  # 4 = background
+        for b in range(n_breaths):
+            raw_cols = np.array([inh_z[b], inhp_z[b], exh_z[b], exhp_z[b]], dtype=float)
+            if max_breath_sec > 0:
+                cols = np.round(raw_cols / max_breath_sec * matrix_size).astype(int)
             else:
-                maxBreathSize = 1  # fallback for single-breath datasets
+                cols = np.array([matrix_size, 0, 0, 0], dtype=int)
+            cols = np.clip(cols, 0, matrix_size)
 
-            # Initialize breath matrix (each row = one breath)
-            breathMatrix = np.zeros((nBreaths, MATRIX_SIZE), dtype=np.uint8)
+            pos = 0
+            k = min(cols[0], matrix_size - pos)
+            comp[b, pos : pos + k] = 0
+            pos += k
+            k = min(cols[1], matrix_size - pos)
+            comp[b, pos : pos + k] = 1
+            pos += k
+            k = min(cols[2], matrix_size - pos)
+            comp[b, pos : pos + k] = 2
+            pos += k
+            k = min(cols[3], matrix_size - pos)
+            comp[b, pos : pos + k] = 3
 
-            # Convert durations to arrays and handle NaNs
-            inh_dur = np.nan_to_num(np.asarray(bm.inhaleDurations), nan=0.0)
-            inhp_dur = np.nan_to_num(np.asarray(bm.inhalePauseDurations), nan=0.0)
-            exh_dur = np.nan_to_num(np.asarray(bm.exhaleDurations), nan=0.0)
-            exhp_dur = np.nan_to_num(np.asarray(bm.exhalePauseDurations), nan=0.0)
+        fig, ax = plt.subplots(figsize=(10, 5))
+        cmap = ListedColormap(
+            np.vstack([phase_colors, bg_color]), name="breath_phases_raw"
+        )
+        ax.imshow(
+            comp, aspect="auto", interpolation="nearest", cmap=cmap, origin="upper"
+        )
 
-            # -----------------------------------------
-            # Build composition matrix
-            # -----------------------------------------
-            for b in range(nBreaths):
-                row = np.ones(MATRIX_SIZE, dtype=np.uint8) * 4  # base = 4 (background)
-                idx = 0
+        tick_step = 0.5
+        sec_labels = np.arange(0.0, max_breath_sec + tick_step, tick_step)
+        x_ticks = np.linspace(0, matrix_size, len(sec_labels))
+        ax.set_xticks(x_ticks)
+        ax.set_xticklabels([f"{x:.1f}".rstrip("0").rstrip(".") for x in sec_labels])
 
-                # Inhale
-                thisInhaleDur = int(round((inh_dur[b] / maxBreathSize) * MATRIX_SIZE))
-                row[:thisInhaleDur] = 0
-                idx = thisInhaleDur
+        ax.set_xlabel("Time (seconds)")
+        ax.set_ylabel("Breath Number")
+        ax.set_title("Breath Composition (Raw)")
 
-                # Inhale pause
-                thisInhalePauseDur = int(
-                    round((inhp_dur[b] / maxBreathSize) * MATRIX_SIZE)
-                )
-                row[idx : idx + thisInhalePauseDur] = 1
-                idx += thisInhalePauseDur
+        legend_handles = [
+            Patch(facecolor=phase_colors[i], edgecolor="none") for i in range(4)
+        ]
+        ax.legend(legend_handles, phase_labels, loc="upper right", frameon=False)
 
-                # Exhale
-                thisExhaleDur = int(round((exh_dur[b] / maxBreathSize) * MATRIX_SIZE))
-                row[idx : idx + thisExhaleDur] = 2
-                idx += thisExhaleDur
+        plt.tight_layout()
+        plt.show()
+        return fig, ax
 
-                # Exhale pause
-                thisExhalePauseDur = int(
-                    round((exhp_dur[b] / maxBreathSize) * MATRIX_SIZE)
-                )
-                row[idx : idx + thisExhalePauseDur] = 3
+    if plottype == "line":
+        fig, ax = plt.subplots(figsize=(9, 5))
 
-                # Clip to matrix size (MATLAB: if length > MATRIX_SIZE)
-                row = row[:MATRIX_SIZE]
-                breathMatrix[b, :] = row
+        cmap = plt.get_cmap("viridis")
+        breath_colors = cmap(np.linspace(0, 1, n_breaths))
 
-            # -----------------------------------------
-            # Plot the image
-            # -----------------------------------------
-            fig, ax = plt.subplots(figsize=(10, 5))
-            cmap = ListedColormap(custom_colors)
+        # Per-breath traces (NaNs = missing => skip those points)
+        for b in range(n_breaths):
+            xs = [1]
+            ys = [float(inh[b])]
 
-            # uint8 conversion mirrors MATLAB’s "image(uint8(...))"
-            _im = ax.imshow(
-                breathMatrix.astype(np.uint8),
-                aspect="auto",
-                interpolation="nearest",
-                cmap=cmap,
-                origin="upper",
-            )
+            if np.isfinite(inhp[b]) and inhp[b] > 0:
+                xs.append(2)
+                ys.append(float(inhp[b]))
 
-            # Set axis limits
-            ax.set_xlim(0.5, MATRIX_SIZE + 0.5)
-            ax.set_ylim(0.5, nBreaths + 0.5)
+            xs.append(3)
+            ys.append(float(exh[b]))
 
-            # X ticks (0:0.5:maxBreathSize)
-            TICK_STEP = 0.5
-            x_tick_labels = np.arange(0, maxBreathSize + TICK_STEP, TICK_STEP)
-            x_ticks = np.round(np.linspace(1, MATRIX_SIZE, len(x_tick_labels))).astype(
-                int
-            )
-            ax.set_xticks(x_ticks)
-            ax.set_xticklabels(
-                [f"{x:.1f}".rstrip("0").rstrip(".") for x in x_tick_labels]
-            )
+            if np.isfinite(exhp[b]) and exhp[b] > 0:
+                xs.append(4)
+                ys.append(float(exhp[b]))
 
-            # Labels
-            ax.set_xlabel("Time (seconds)")
-            ax.set_ylabel("Breath Number")
-            ax.set_title("Breath Composition (Raw)")
-
-            # Custom legend (dummy lines)
-            handles = [
-                Line2D([], [], color=custom_colors[i], linewidth=2) for i in range(4)
-            ]
-            ax.legend(handles, breath_phase_labels, loc="upper right", frameon=False)
-
-            plt.tight_layout()
-            plt.show()
-            ## TODO: not tested yet
-        case "line":
-            nBreaths = len(bm.inhaleDurations)
-
-            fig, ax = plt.subplots(figsize=(8, 5))
-
-            # parula equivalent in Matplotlib: use 'viridis'
-            my_colors = sns.color_palette("viridis", n_colors=nBreaths)
-
-            # ------------------------------------------------
-            # Plot each breath’s phase durations
-            # ------------------------------------------------
-            for b in range(nBreaths):
-                # Always an inhale
-                plot_set = [[1, bm.inhaleDurations[b]]]
-
-                # Optional inhale pause
-                if not np.isnan(bm.inhalePauseDurations[b]):
-                    plot_set.append([2, bm.inhalePauseDurations[b]])
-
-                    # Always an exhale
-                    plot_set.append([3, bm.exhaleDurations[b]])
-
-                # Optional exhale pause
-                if not np.isnan(bm.exhalePauseDurations[b]):
-                    plot_set.append([4, bm.exhalePauseDurations[b]])
-
-                plot_set = np.asarray(plot_set, dtype=float)
-
-            ax.plot(
-                plot_set[:, 0],  # type: ignore
-                plot_set[:, 1],  # type: ignore
-                color=my_colors[b],  # type: ignore
-                linewidth=1.5,
-            )
+            ax.plot(xs, ys, color=breath_colors[b], linewidth=1.2, alpha=0.85)
             ax.scatter(
-                plot_set[:, 0],  # type: ignore
-                plot_set[:, 1],  # type: ignore
+                xs,
+                ys,
                 marker="s",
-                facecolor=my_colors[b],  # type: ignore
+                facecolor=breath_colors[b],
                 edgecolor="none",
-                s=40,
+                s=30,
+                alpha=0.9,
             )
 
-            # ------------------------------------------------
-            # Compute means and standard deviations
-            # ------------------------------------------------
-            inh = np.asarray(bm.inhaleDurations, dtype=float)
-            inhp = np.asarray(bm.inhalePauseDurations, dtype=float)
-            exh = np.asarray(bm.exhaleDurations, dtype=float)
-            exhp = np.asarray(bm.exhalePauseDurations, dtype=float)
-
-            all_means = np.array(
-                [
-                    np.nanmean(inh),
-                    np.nanmean(inhp),
-                    np.nanmean(exh),
-                    np.nanmean(exhp),
-                ]
-            )
-            all_stds = np.array(
-                [
-                    np.nanstd(inh),
-                    np.nanstd(inhp),
-                    np.nanstd(exh),
-                    np.nanstd(exhp),
-                ]
+        # Stats: exclude NaNs (treat as missing)
+        def _nanmean_std(x: np.ndarray) -> tuple[float, float, float]:
+            finite = x[np.isfinite(x)]
+            if finite.size == 0:
+                return np.nan, np.nan, np.nan
+            return (
+                float(np.nanmean(finite)),
+                float(np.nanstd(finite)),
+                float(np.nanmax(finite)),
             )
 
-            # Add error bars (black vertical bars)
-            ax.errorbar(
-                [1, 2, 3, 4],
-                all_means,
-                yerr=all_stds,
-                color="k",
-                linestyle="none",
-                linewidth=2,
-            )
+        means = []
+        stds = []
+        maxes = []
+        for arr in (inh, inhp, exh, exhp):
+            m, s, mx = _nanmean_std(arr)
+            means.append(m)
+            stds.append(s)
+            maxes.append(mx)
 
-            # ------------------------------------------------
-            # Axis setup
-            # ------------------------------------------------
-            ax.set_xlim(0, 5)
-            ax.set_xticks([1, 2, 3, 4])
-            ax.set_xticklabels(
-                [
-                    "Inhale Durations",
-                    "Inhale Pause Durations",
-                    "Exhale Durations",
-                    "Exhale Pause Durations",
-                ]
-            )
-            ax.set_ylabel("Time (seconds)")
+        means = np.array(means, dtype=float)
+        stds = np.array(stds, dtype=float)
+        maxes = np.array(maxes, dtype=float)
 
-            all_maxes = np.array(
-                [
-                    np.nanmax(inh),
-                    np.nanmax(inhp),
-                    np.nanmax(exh),
-                    np.nanmax(exhp),
-                ]
-            )
-            ymax = np.nanmax(all_maxes)
-            ax.set_ylim(0, ymax + 0.5)
+        ax.errorbar(
+            [1, 2, 3, 4],
+            means,
+            yerr=stds,
+            color="k",
+            linestyle="none",
+            linewidth=2,
+            capsize=3,
+        )
 
-            # ------------------------------------------------
-            # Text annotations (mean & std)
-            # ------------------------------------------------
-            topline_bump = 0.2
-            bottomline_bump = 0.1
-            fsize = 10
+        ax.set_xlim(0.5, 4.5)
+        ax.set_xticks([1, 2, 3, 4])
+        ax.set_xticklabels(["Inhale", "Inhale Pause", "Exhale", "Exhale Pause"])
+        ax.set_ylabel("Time (seconds)")
+        ax.set_title("Breath Phase Durations (Per-Breath Lines)")
 
-            for xi in range(1, 5):
-                mean = all_means[xi - 1]
-                std = all_stds[xi - 1]
-                mmax = all_maxes[xi - 1]
+        ymax = float(np.nanmax(maxes)) if np.isfinite(np.nanmax(maxes)) else 1.0
+        ax.set_ylim(0, ymax + 0.6)
 
-                if np.isfinite(mmax):
-                    ax.text(
-                        xi,
-                        mmax + topline_bump,
-                        f"Mean = {mean:.3g} s",
-                        ha="center",
-                        fontsize=fsize,
-                    )
-                    ax.text(
-                        xi,
-                        mmax + bottomline_bump,
-                        f"Std = {std:.3g} s",
-                        ha="center",
-                        fontsize=fsize,
-                    )
+        for xi in range(1, 5):
+            m = means[xi - 1]
+            s = stds[xi - 1]
+            if np.isfinite(m):
+                ax.text(xi, ymax + 0.35, f"Mean={m:.3g}s", ha="center", fontsize=9)
+            if np.isfinite(s):
+                ax.text(xi, ymax + 0.15, f"Std={s:.3g}s", ha="center", fontsize=9)
 
-            ax.set_title("Breath Phase Durations (Per-Breath Lines)")
-            plt.tight_layout()
-            plt.show()
-        case "hist":
-            inhale = np.asarray(bm.inhaleDurations, dtype=float)
-            inhale_pause = np.asarray(bm.inhalePauseDurations, dtype=float)
-            exhale = np.asarray(bm.exhaleDurations, dtype=float)
-            exhale_pause = np.asarray(bm.exhalePauseDurations, dtype=float)
+        plt.tight_layout()
+        plt.show()
+        return fig, ax
 
-            # Replace NaNs for histogram counting
-            inhale = inhale[np.isfinite(inhale)]
-            inhale_pause = inhale_pause[np.isfinite(inhale_pause)]
-            exhale = exhale[np.isfinite(exhale)]
-            exhale_pause = exhale_pause[np.isfinite(exhale_pause)]
+    # plottype == "hist"
+    datasets = [
+        (inh, "Inhale Durations (s)"),
+        (inhp, "Inhale Pause Durations (s)"),
+        (exh, "Exhale Durations (s)"),
+        (exhp, "Exhale Pause Durations (s)"),
+    ]
 
-            # Determine number of bins (same logic as MATLAB)
-            nBins = int(np.floor(len(inhale) / 5))
-            if nBins < 5:
-                nBins = 10
+    fig, axes = plt.subplots(2, 2, figsize=(9, 7))
+    axes = axes.ravel()
 
-            # Get 4 distinct colors (parula-like) using seaborn
-            my_colors = sns.color_palette("crest", n_colors=4)
+    for i, (data, xlabel) in enumerate(datasets):
+        ax = axes[i]
+        finite = data[np.isfinite(data)]
+        n = int(finite.size)
 
-            # --------------------------------------------------
-            # Build the figure
-            # --------------------------------------------------
-            fig, axes = plt.subplots(2, 2, figsize=(8, 6))
-            axes = axes.flatten()
+        # MATLAB-ish: floor(n/5), min 10
+        n_bins = int(np.floor(n / 5)) if n > 0 else 10
+        if n_bins < 10:
+            n_bins = 10
 
-            datasets = [
-                (inhale, "Inhale Durations (seconds)"),
-                (inhale_pause, "Inhale Pause Durations (seconds)"),
-                (exhale, "Exhale Durations (seconds)"),
-                (exhale_pause, "Exhale Pause Durations (seconds)"),
-            ]
+        counts, bins = (
+            np.histogram(finite, bins=n_bins)
+            if n > 0
+            else (np.array([0]), np.array([0, 1]))
+        )
+        centers = 0.5 * (bins[:-1] + bins[1:])
+        width = (bins[1] - bins[0]) if len(bins) > 1 else 1.0
 
-            for i, (data, xlabel) in enumerate(datasets):
-                ax = axes[i]
-                counts, bins = np.histogram(data, bins=nBins)
-                centers = 0.5 * (bins[:-1] + bins[1:])
-                ax.bar(
-                    centers,
-                    counts,
-                    width=(bins[1] - bins[0]),
-                    color=my_colors[i],
-                    edgecolor="none",
-                )
-                ax.set_xlabel(xlabel)
-                ax.set_ylabel("Count")
-                ax.set_title(xlabel.replace(" (seconds)", ""))
+        ax.bar(centers, counts, width=width, color=phase_colors[i], edgecolor="none")
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel("Count")
+        ax.set_title(xlabel.replace(" (s)", ""))
 
-            plt.tight_layout()
-            plt.show()
+    fig.suptitle("Breath Phase Duration Histograms (NaNs excluded)", y=1.02)
+    plt.tight_layout()
+    plt.show()
+    return fig, axes

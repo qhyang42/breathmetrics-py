@@ -9,7 +9,7 @@ description = "Breathing signal parameterization and feature extraction (Python 
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
-authors = [{ name = "Qiaohan Yang, Adam Dede, Torben Noto" }]
+authors = [{ name = "Qiaohan Yang, Adam Dede, Torben Noto, Vivek Sagar" }]
 
 dependencies = [
   "numpy>=1.26",

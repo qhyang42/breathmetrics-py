@@ -308,9 +308,7 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
             resp, corrected_smooth_window.astype(int)
         )
         self._set_feature("smoothed_respiration", smoothed, status="computed")
-        self.time = np.arange(
-            1, len(resp) / self.srate, 1 / self.srate, dtype=np.float64
-        )
+        self.time = np.arange(len(resp), dtype=np.float64) / self.srate
 
     # ----- feature registry helpers -----
     def supports(self, feature_name: str) -> bool:

@@ -18,9 +18,8 @@
   TODOs: 
 
   1. plotting code. (never tested with real data. maybe change some of them?). Add method to pull pretty summary plot? 
-  2. CLI (for terminal/HPC something like `breathmetrics estimate resp.csv --fs 1000 --datatype humanAirflow`).
-  3. add window feature pipeline  
-  4. GUI finetuning 
+  2. add window feature pipeline  
+  3. GUI finetuning 
 
 
 
