@@ -1,3 +1,12 @@
+## Quickstart
+Airflow data only.
+```bash
+pip install breathmetrics
+breathmetrics estimate examples/human_airflow.csv --fs 1000 --datatype humanAirflow --out results/
+breathmetrics inspect results/bm.pkl
+breathmetrics info results/bm.pkl
+```
+
 ## 🛠️ Developer Shortcuts
 
 Sometimes you just want to move fast and push messy code. Here are a few useful tricks:

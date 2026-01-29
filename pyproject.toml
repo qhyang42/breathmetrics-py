@@ -30,7 +30,7 @@ Issues = "https://github.com/yourname/breathmetrics/issues"
 dev = ["pytest", "ruff", "black", "pre-commit"]
 
 [project.scripts]
-breathmetrics = "breathmetrics.cli:app"
+breathmetrics = "breathmetrics.cli:main"
 
 # Tell setuptools we use the src/ layout
 [tool.setuptools]
