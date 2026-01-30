@@ -37,6 +37,7 @@ coverage.xml
 *.log
 .pytest_cache/
 data/
+_tmp_results/
 
 
 # --- VS Code ---

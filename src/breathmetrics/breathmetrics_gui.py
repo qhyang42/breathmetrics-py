@@ -17,7 +17,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont, QKeyEvent
+from PyQt6.QtGui import QCloseEvent, QFont, QKeyEvent
 from PyQt6.QtWidgets import (
     QApplication,
     QFrame,
@@ -444,6 +444,7 @@ class BreathMetricsMainWindow(QMainWindow):
         self._supports_exhale_offsets = self._supports("exhale_offsets")
         self._backup = self._make_backup()
         self.editor = BreathEditor(self.bm)
+        self._save_on_close: bool = False
 
         self.current_idx: int = 0
         self.breath_rows: list[BreathRow] = self._make_rows_from_bm()
@@ -654,18 +655,18 @@ class BreathMetricsMainWindow(QMainWindow):
         self.add_note_btn = QPushButton("Add Note To This Breath")
         self.reject_btn = QPushButton("Reject This Breath")
         self.undo_btn = QPushButton("Undo Changes To This Breath")
-        self.cancel_btn = QPushButton("Cancel")
+        self.save_btn = QPushButton("Save All Changes")
 
         self.add_note_btn.clicked.connect(lambda: self._stub("Add note"))
         self.reject_btn.clicked.connect(self._toggle_reject_current)
         self.undo_btn.clicked.connect(self._undo_current_breath)
-        self.cancel_btn.clicked.connect(self._cancel_and_discard)
+        self.save_btn.clicked.connect(self._save_and_close)
 
         gl.addWidget(self.add_note_btn)
         gl.addWidget(self.reject_btn)
         gl.addWidget(self.undo_btn)
         gl.addSpacing(6)
-        gl.addWidget(self.cancel_btn)
+        gl.addWidget(self.save_btn)
 
         layout.addWidget(group)
         return panel
@@ -804,7 +805,12 @@ class BreathMetricsMainWindow(QMainWindow):
         self._refresh_row(i)
         self._select_breath(i)
 
-    def _cancel_and_discard(self) -> None:
+    def _save_and_close(self) -> None:
+        self._save_on_close = True
+        setattr(self.bm, "_gui_save_requested", True)
+        self.close()
+
+    def _confirm_discard(self) -> bool:
         resp = QMessageBox.question(
             self,
             "Discard Changes?",
@@ -812,17 +818,28 @@ class BreathMetricsMainWindow(QMainWindow):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
-        if resp != QMessageBox.StandardButton.Yes:
-            return
-        if self._backup is not None:
-            self._restore_from_backup()
-        self.close()
+        return resp == QMessageBox.StandardButton.Yes
 
     def _restore_from_backup(self) -> None:
         if self._backup is None:
             return
         for k, v in self._backup.items():
             setattr(self.bm, k, np.copy(v))
+
+    def closeEvent(
+        self, a0: QCloseEvent | None
+    ) -> None:  # stupid type checker requires this.
+        if a0 is None:
+            return
+        if self._save_on_close:
+            a0.accept()
+            return
+        if self._confirm_discard():
+            self._restore_from_backup()
+            setattr(self.bm, "_gui_save_requested", False)
+            a0.accept()
+            return
+        a0.ignore()
 
     def _make_backup(self) -> dict[str, np.ndarray]:
         keys = [

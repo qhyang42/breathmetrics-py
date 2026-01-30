@@ -105,7 +105,33 @@ def _inspect(args: argparse.Namespace) -> None:
         )
     if not hasattr(obj, "inspect"):
         _fail("Loaded object does not support inspection.")
+    edited_path = args.path.with_name(f"{args.path.stem}_edited{args.path.suffix}")
+    if edited_path.exists() and not args.overwrite:
+        _fail(f"⚠️  STOP: Output file '{edited_path.name}' already exists!")
     obj.inspect()
+    try:
+        from PyQt6.QtWidgets import QApplication
+
+        app = QApplication.instance()
+        if app is not None:
+            app.exec()
+    except Exception as exc:
+        _fail(
+            "Unable to launch the GUI. Make sure you are running in a GUI session "
+            "and that PyQt6 is installed in this environment. "
+            f"(Details: {exc})"
+        )
+    if hasattr(obj, "_inspect_window"):
+        try:
+            delattr(obj, "_inspect_window")
+        except Exception:
+            pass
+    if args.overwrite:
+        if getattr(obj, "_gui_save_requested", False):
+            _dump_pickle(obj, args.path, overwrite=True)
+    else:
+        if getattr(obj, "_gui_save_requested", False):
+            _dump_pickle(obj, edited_path, overwrite=False)
 
 
 def _info(args: argparse.Namespace) -> None:
@@ -203,6 +229,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     inspect.add_argument("path", type=Path, help="Path to .pkl BreathMetrics object.")
     inspect.add_argument("--verbose", action="store_true", help="Verbose output.")
+    inspect.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite the original .pkl on GUI close.",
+    )
     inspect.set_defaults(func=_inspect)
 
     info = subparsers.add_parser(
