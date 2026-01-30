@@ -1,6 +1,7 @@
 import numpy as np
 from scipy.ndimage import gaussian_filter1d
 from numpy.typing import ArrayLike
+import pandas as pd
 
 ## utilities for breathmetrics
 
@@ -105,6 +106,63 @@ def get_valid_breath_indices(is_valid, n_inhales: int, n_exhales: int):
 def zscore(x: np.ndarray, eps: float = 1e-9) -> np.ndarray:
     x = x.astype(float)
     return (x - x.mean()) / (x.std() + eps)
+
+
+def features_to_dataframe(bm, *, include_unsupported: bool = False) -> pd.DataFrame:
+    from breathmetrics.core import FEATURE_SPECS
+
+    rows: dict[str, np.ndarray] = {}
+    scalars: dict[str, float] = {}
+
+    for spec in FEATURE_SPECS:
+        name = spec.name
+        if not include_unsupported and not bm.supports(name):
+            continue
+        if getattr(bm, "statuses", {}).get(name) not in {"computed", "edited"}:
+            continue
+        value = getattr(bm, name, None)
+        if value is None:
+            continue
+
+        if spec.kind in {"event_index", "per_breath"}:
+            arr = np.asarray(value)
+            if arr.ndim != 1:
+                arr = arr.ravel()
+            rows[name] = arr
+        elif spec.kind == "scalar":
+            if isinstance(value, dict):
+                for k, v in value.items():
+                    scalars[f"{name}__{k}"] = float(v)
+            else:
+                scalars[name] = float(value)
+
+    max_len = max((arr.size for arr in rows.values()), default=0)
+    if max_len == 0:
+        if not scalars:
+            raise ValueError("No computed features available for export.")
+        return pd.DataFrame([scalars])
+
+    data: dict[str, np.ndarray] = {}
+    data["breath_index"] = np.arange(max_len, dtype=int)
+
+    for spec in FEATURE_SPECS:
+        name = spec.name
+        if name not in rows:
+            continue
+        arr = rows[name]
+        if arr.size == max_len:
+            data[name] = arr
+            continue
+        fill_val = MISSING_EVENT if spec.kind == "event_index" else np.nan
+        padded_dtype = int if spec.kind == "event_index" else float
+        padded = np.full(max_len, fill_val, dtype=padded_dtype)
+        padded[: arr.size] = arr
+        data[name] = padded
+
+    for k, v in scalars.items():
+        data[k] = np.full(max_len, v, dtype=float)
+
+    return pd.DataFrame(data)
 
 
 def hist_like_matlab(this_window: np.ndarray, custom_bins: np.ndarray):

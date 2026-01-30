@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Optional, Mapping, cast
 
 import numpy as np
@@ -783,6 +784,27 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
             trial_event_inds,
             rejected_event_inds,
         )
+
+    def export_features(
+        self,
+        path: str | Path,
+        *,
+        overwrite: bool = False,
+        include_unsupported: bool = False,
+    ) -> Path:
+        """
+        Export all computed features to a CSV file.
+        """
+        out_path = Path(path)
+        if out_path.exists() and not overwrite:
+            raise FileExistsError(
+                f"Output already exists: {out_path} (use overwrite=True to replace)"
+            )
+        df = breathmetrics.utils.features_to_dataframe(
+            self, include_unsupported=include_unsupported
+        )
+        df.to_csv(out_path, index=False)
+        return out_path
 
     ### plotting methods
     def plot_features(

@@ -33,6 +33,8 @@ print(
 bmobj.estimate_all_features(verbose=True, compute_secondary=True)
 print("complete:", bmobj.feature_estimations_complete)
 
+# %% save test
+bmobj.export_features("../_tmp_results/features.csv")
 # %% GUI launch test
 bmobj.inspect()
 
