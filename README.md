@@ -49,17 +49,20 @@ This package is a Python reimplementation and extension of the original MATLAB B
 ```bash
 git clone https://github.com/qhyang42/breathmetrics-py.git
 cd breathmetrics
+
+conda env create -f environment.yml
+conda activate breathmetrics-py
+
 pip install -e . 
 ```
 
-## 🚀 Example usage in jupyter notebook. 
+## 🚀 Jupyter notebook quickstart:
 ```python
-
 import breathmetrics
 import numpy as np
 import pandas as pd
 
-# load data
+# load data as ndarray
 data = pd.read_csv("respiration.csv")
 resp = data["resp"].values
 fs = 1000
@@ -82,11 +85,11 @@ bmobj.inspect()
 # or if you like a bit more flourish 👀, try 
 bmobj.behold()
 
-# export features to CSV
+# export estimated features to CSV
 bm.export_features("features.csv")
 ```
-## 🤖 Command line quickstart
-Airflow data only.
+## 🤖 Command line quickstart:
+This works for human airflow data only (support for other datatypes coming soon).
 ```bash
 pip install breathmetrics
 
