@@ -86,7 +86,7 @@ bmobj.inspect()
 bmobj.behold()
 
 # export estimated features to CSV
-bm.export_features("features.csv")
+bmobj.export_features("features.csv")
 ```
 ## 🤖 Command line quickstart:
 This works for human airflow data only (support for other datatypes coming soon).
