@@ -22,8 +22,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourname/breathmetrics"
-Issues = "https://github.com/yourname/breathmetrics/issues"
+Homepage = "https://github.com/qhyang42/breathmetrics-py"
+Issues = "https://github.com/qhyang42/breathmetrics-py/issues"
 
 [project.optional-dependencies]
 dev = ["pytest", "ruff", "black", "pre-commit"]
