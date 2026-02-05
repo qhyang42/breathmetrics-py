@@ -8,6 +8,6 @@ dependencies:
   - scipy
   - pandas
   - matplotlib
-  - conda-forge::pyqt
-  - conda-forge::qt-main
+  - seaborn
+  - conda-forge::pyqt6
   - pip
