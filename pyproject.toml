@@ -17,7 +17,7 @@ dependencies = [
   "pandas>=2.0",
   "matplotlib>=3.8",
   "seaborn>=0.13,<0.14", 
-  "pyqt6>=6.5" # For GUI
+  # pyqt6 is needed for GUI but not listed here to avoid pip/conda pyqt conflict
 
 ]
 
