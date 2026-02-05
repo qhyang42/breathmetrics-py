@@ -48,7 +48,7 @@ This package is a Python reimplementation and extension of the original MATLAB B
 
 ```bash
 git clone https://github.com/qhyang42/breathmetrics-py.git
-cd breathmetrics
+cd breathmetrics-py
 
 conda env create -f environment.yml
 conda activate breathmetrics-py
@@ -91,13 +91,13 @@ bmobj.export_features("features.csv")
 ## 🤖 Command line quickstart:
 This works for human airflow data only (support for other datatypes coming soon).
 ```bash
-pip install breathmetrics
 
 breathmetrics estimate examples/human_airflow.csv --fs 1000 --datatype humanAirflow --out results/
 
+breathmetrics info results/bm.pkl
+
 breathmetrics inspect results/bm.pkl
 
-breathmetrics info results/bm.pkl
 ```
 
 
