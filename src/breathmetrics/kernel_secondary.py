@@ -1,7 +1,7 @@
 ## secondary features and ERP calculations
 from __future__ import annotations
 import numpy as np
-
+import pandas as pd
 
 # secondary feature calculation.
 # breathing rate
@@ -265,3 +265,125 @@ def compute_time_symmetry_around_point(signal, point_idx) -> float:
         corr = np.corrcoef(segment, flipped_segment)[0, 1]
 
     return corr  # type: ignore
+
+
+def calculate_max_flowchange(signal) -> float:
+    signal = np.asarray(signal, dtype=float)
+
+    if signal.size < 2:
+        return np.nan
+
+    return float(np.max(np.diff(signal)))
+
+
+_SHAPE_FEATURE_COLUMNS = (
+    "inhale_smoothness",
+    "inpeak_to_extrough_smoothness",
+    "exhale_smoothness",
+    "inhale_curvature",
+    "inpeak_to_extrough_curvature",
+    "exhale_curvature",
+    "inpeak_to_extrough_slope",
+    "max_flowchange",
+)
+
+
+def _event_at(events, breath_id: int, signal_size: int) -> int | None:
+    if events is None:
+        return None
+    values = np.asarray(events).ravel()
+    if breath_id >= values.size:
+        return None
+    try:
+        value = float(values[breath_id])
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(value) or not value.is_integer():
+        return None
+    index = int(value)
+    if index < 0 or index >= signal_size:
+        return None
+    return index
+
+
+def _inclusive_segment(
+    signal: np.ndarray, start_events, end_events, breath_id: int
+) -> np.ndarray | None:
+    start = _event_at(start_events, breath_id, signal.size)
+    end = _event_at(end_events, breath_id, signal.size)
+    if start is None or end is None or start > end:
+        return None
+    segment = signal[start : end + 1]
+    if segment.size == 0 or not np.all(np.isfinite(segment)):
+        return None
+    return segment
+
+
+def _safe_shape_feature(function, *args) -> float:
+    try:
+        value = float(function(*args))
+    except (TypeError, ValueError, FloatingPointError, np.linalg.LinAlgError):
+        return np.nan
+    return value if np.isfinite(value) else np.nan
+
+
+def _calculate_shape_features(
+    respiration,
+    srate: float,
+    inhale_onsets,
+    inhale_peaks=None,
+    exhale_troughs=None,
+    exhale_onsets=None,
+    exhale_offsets=None,
+) -> pd.DataFrame:
+    """Assemble aligned per-breath shape features from detected landmarks."""
+    signal = np.asarray(respiration, dtype=float).ravel()
+    onset_values = np.asarray(inhale_onsets).ravel()
+    data = {
+        "breath_id": np.arange(onset_values.size, dtype=int),
+        **{
+            column: np.full(onset_values.size, np.nan, dtype=float)
+            for column in _SHAPE_FEATURE_COLUMNS
+        },
+    }
+
+    for breath_id in range(onset_values.size):
+        inhale = _inclusive_segment(signal, onset_values, inhale_peaks, breath_id)
+        inpeak_to_extrough = _inclusive_segment(
+            signal, inhale_peaks, exhale_troughs, breath_id
+        )
+        exhale = _inclusive_segment(signal, exhale_onsets, exhale_offsets, breath_id)
+        full_breath = _inclusive_segment(
+            signal, onset_values, exhale_offsets, breath_id
+        )
+
+        if inhale is not None:
+            data["inhale_smoothness"][breath_id] = _safe_shape_feature(
+                calculate_smoothness, inhale, srate
+            )
+            data["inhale_curvature"][breath_id] = _safe_shape_feature(
+                calculate_curvature, inhale
+            )
+        if inpeak_to_extrough is not None:
+            data["inpeak_to_extrough_smoothness"][breath_id] = _safe_shape_feature(
+                calculate_smoothness, inpeak_to_extrough, srate
+            )
+            data["inpeak_to_extrough_curvature"][breath_id] = _safe_shape_feature(
+                calculate_curvature, inpeak_to_extrough
+            )
+            data["inpeak_to_extrough_slope"][breath_id] = _safe_shape_feature(
+                calculate_phase2slope, inpeak_to_extrough
+            )
+        if exhale is not None:
+            data["exhale_smoothness"][breath_id] = _safe_shape_feature(
+                calculate_smoothness, exhale, srate
+            )
+            data["exhale_curvature"][breath_id] = _safe_shape_feature(
+                calculate_curvature, exhale
+            )
+        if full_breath is not None:
+            data["max_flowchange"][breath_id] = _safe_shape_feature(
+                calculate_max_flowchange, full_breath
+            )
+
+    return pd.DataFrame(data)

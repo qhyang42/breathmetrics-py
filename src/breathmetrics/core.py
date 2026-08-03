@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Optional, Mapping, cast
 
 import numpy as np
+import pandas as pd
 from numpy.typing import ArrayLike, NDArray
 
 # import breathmetrics.kernel
@@ -12,6 +13,7 @@ from numpy.typing import ArrayLike, NDArray
 import breathmetrics.kernel_onset_detection_methods
 import breathmetrics.kernel_plot
 import breathmetrics.kernel_primary
+import breathmetrics.kernel_secondary
 import breathmetrics.utils
 
 FloatArray = NDArray[np.float64]
@@ -255,6 +257,7 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
 
     # secondary (note: not float!)
     secondary_features: Optional[Mapping[str, float]]
+    shape_features: Optional[pd.DataFrame]
 
     # GUI handle
     _inspect_window: Any
@@ -283,6 +286,7 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
         self.feature_estimations_complete = False
         self.features_manually_edited = False
         self.is_valid = None
+        self.shape_features = None
 
         # seed core signals
         self._set_feature("raw_respiration", resp, status="computed")
@@ -464,8 +468,8 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
         inhale_time2peak, exhale_time2trough = (
             breathmetrics.kernel_primary.find_time_to_peak_trough(
                 cast(IntArray, self.inhale_onsets),
-                cast(IntArray, self.inhale_peaks),
                 cast(IntArray, self.exhale_onsets),
+                cast(IntArray, self.inhale_peaks),
                 cast(IntArray, self.exhale_troughs),
                 self.srate,
             )
@@ -541,6 +545,19 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
         )
         self._set_feature("inhale_volumes", inhale_volumes)
         self._set_feature("exhale_volumes", exhale_volumes)
+
+    def find_shape_features(self) -> None:
+        """Calculate per-breath waveform-shape features."""
+        self._require_features("baseline_corrected_respiration", "inhale_onsets")
+        self.shape_features = breathmetrics.kernel_secondary._calculate_shape_features(
+            cast(FloatArray, self.baseline_corrected_respiration),
+            self.srate,
+            cast(IntArray, self.inhale_onsets),
+            self.inhale_peaks,
+            self.exhale_troughs,
+            self.exhale_onsets,
+            self.exhale_offsets,
+        )
 
     def _infer_onsets_from_extrema(self) -> None:
         if self.signal_peaks is None or self.signal_troughs is None:
