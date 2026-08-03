@@ -129,14 +129,14 @@ def find_onsets_and_pauses_legacy(
 
             binning_threshold = 0.25
 
-            for additional_bin in range(0, maxpausebins):
+            for additional_bin in range(1, maxpausebins + 1):
                 this_bin = mode_bin - additional_bin
                 nvals_added = amplitude_values[this_bin]
                 if nvals_added > max_bin_total * binning_threshold:
                     min_pause_range = window_bins[this_bin]
 
             # add bins in negative direction
-            for additional_bin in range(0, maxpausebins):
+            for additional_bin in range(1, maxpausebins + 1):
                 this_bin = mode_bin + additional_bin
                 nvals_added = amplitude_values[this_bin]
                 if nvals_added > max_bin_total * binning_threshold:
@@ -179,14 +179,14 @@ def find_onsets_and_pauses_legacy(
 
             binning_threshold = 0.25
 
-            for additional_bin in range(0, maxpausebins):
+            for additional_bin in range(1, maxpausebins + 1):
                 this_bin = mode_bin - additional_bin
                 nvals_added = amplitude_values[this_bin]
                 if nvals_added > max_bin_total * binning_threshold:
                     min_pause_range = window_bins[this_bin]
 
             # add bins in negative direction
-            for additional_bin in range(0, maxpausebins):
+            for additional_bin in range(1, maxpausebins + 1):
                 this_bin = mode_bin + additional_bin
                 nvals_added = amplitude_values[this_bin]
                 if nvals_added > max_bin_total * binning_threshold:
