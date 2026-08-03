@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 
 from breathmetrics.core import Breathe
-from breathmetrics.kernel_secondary import (
+from breathmetrics.kernel_resp_stats import (
     calculate_curvature,
     calculate_max_flowchange,
     calculate_phase2slope,
@@ -216,3 +216,35 @@ def test_find_shape_features_requires_signal_and_inhale_onsets():
     breathe.bsl_corrected_respiration = breathe.raw_respiration
     with pytest.raises(ValueError, match="inhale_onsets"):
         breathe.find_shape_features()
+
+
+def test_export_features_includes_shape_feature_columns(tmp_path):
+    signal = np.sin(np.linspace(0, 6 * np.pi, 70))
+    breathe = make_breathe(
+        signal,
+        inhale_onsets=[2, 24, 46],
+        inhale_peaks=[7, 29, 51],
+        exhale_troughs=[13, 35, 57],
+        exhale_onsets=[14, 36, 58],
+        exhale_offsets=[21, 43, 66],
+    )
+    breathe.find_shape_features()
+
+    output_path = breathe.export_features(tmp_path / "features.csv")
+    exported = pd.read_csv(output_path)
+
+    shape_columns = [
+        "inhale_smoothness",
+        "inpeak_to_extrough_smoothness",
+        "exhale_smoothness",
+        "inhale_curvature",
+        "inpeak_to_extrough_curvature",
+        "exhale_curvature",
+        "inpeak_to_extrough_slope",
+        "max_flowchange",
+    ]
+    assert all(column in exported.columns for column in shape_columns)
+    np.testing.assert_allclose(
+        exported[shape_columns].to_numpy(),
+        breathe.shape_features[shape_columns].to_numpy(),
+    )

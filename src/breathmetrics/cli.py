@@ -174,17 +174,7 @@ def _info(args: argparse.Namespace) -> None:
     print(f"primary_features: {_format_feature_status(obj, primary)}")
 
     if args.verbose:
-        extra = [
-            "inhale_peaks",
-            "exhale_troughs",
-            "inhale_time2peak",
-            "exhale_time2trough",
-            "inhale_durations",
-            "exhale_durations",
-            "inhale_volumes",
-            "exhale_volumes",
-        ]
-        print(f"secondary_features: {_format_feature_status(obj, extra)}")
+        print(_format_feature_status(obj, ["resp_stats"]))
 
 
 def _build_parser() -> argparse.ArgumentParser:

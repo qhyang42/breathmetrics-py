@@ -159,6 +159,18 @@ def features_to_dataframe(bm, *, include_unsupported: bool = False) -> pd.DataFr
         padded[: arr.size] = arr
         data[name] = padded
 
+    shape_features = getattr(bm, "shape_features", None)
+    if isinstance(shape_features, pd.DataFrame) and not shape_features.empty:
+        for name in shape_features.columns:
+            if name == "breath_id":
+                continue
+            values = shape_features[name].to_numpy(dtype=float)
+            aligned = np.full(max_len, np.nan, dtype=float)
+            breath_ids = shape_features["breath_id"].to_numpy(dtype=int)
+            valid = (breath_ids >= 0) & (breath_ids < max_len)
+            aligned[breath_ids[valid]] = values[valid]
+            data[name] = aligned
+
     for k, v in scalars.items():
         data[k] = np.full(max_len, v, dtype=float)
 

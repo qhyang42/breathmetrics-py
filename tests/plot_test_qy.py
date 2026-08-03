@@ -16,7 +16,7 @@ time = np.arange(resp.size) / fs  # type: ignore
 
 # %%
 bmobj = breathmetrics.Breathe(data, fs, "humanAirflow")
-bmobj.estimate_all_features(verbose=True, compute_secondary=False)
+bmobj.estimate_all_features(verbose=True, compute_resp_stats=False)
 
 # %%
 plot_respiratory_features(bmobj)

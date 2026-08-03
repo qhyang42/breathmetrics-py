@@ -13,7 +13,7 @@ from numpy.typing import ArrayLike, NDArray
 import breathmetrics.kernel_onset_detection_methods
 import breathmetrics.kernel_plot
 import breathmetrics.kernel_primary
-import breathmetrics.kernel_secondary
+import breathmetrics.kernel_resp_stats
 import breathmetrics.utils
 
 FloatArray = NDArray[np.float64]
@@ -190,7 +190,7 @@ FEATURE_SPECS: list[FeatureSpec] = [
         missing_value=np.nan,
     ),
     FeatureSpec(
-        name="secondary_features",
+        name="resp_stats",
         kind="scalar",
         supported_by=frozenset({CAPABILITY_AIRFLOW, CAPABILITY_NON_AIRFLOW}),
         dtype=float,
@@ -255,8 +255,8 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
     peak_inspiratory_flows: Optional[FloatArray]
     trough_expiratory_flows: Optional[FloatArray]
 
-    # secondary (note: not float!)
-    secondary_features: Optional[Mapping[str, float]]
+    # Summary statistics of all respiratory cycles in the recording (note: not float!)
+    resp_stats: Optional[Mapping[str, float]]
     shape_features: Optional[pd.DataFrame]
 
     # GUI handle
@@ -549,7 +549,7 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
     def find_shape_features(self) -> None:
         """Calculate per-breath waveform-shape features."""
         self._require_features("baseline_corrected_respiration", "inhale_onsets")
-        self.shape_features = breathmetrics.kernel_secondary._calculate_shape_features(
+        self.shape_features = breathmetrics.kernel_resp_stats._calculate_shape_features(
             cast(FloatArray, self.baseline_corrected_respiration),
             self.srate,
             cast(IntArray, self.inhale_onsets),
@@ -595,13 +595,11 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
         self._set_feature("inhale_onsets", inhale_onsets)
         self._set_feature("exhale_onsets", exhale_onsets)
 
-    ## secondary features TODO: the whole thing needs test
+    ## Summary statistics of all respiratory cycles in the recording; TODO: needs testing
 
-    def get_secondary_respiratory_features(
-        self, verbose: bool = False
-    ) -> dict[str, float]:
+    def get_resp_stats(self, verbose: bool = False) -> dict[str, float]:
         """
-        Compute secondary (summary-level) respiratory statistics from a BreathMetrics object.
+        Compute summary statistics of all respiratory cycles in the recording.
 
         Parameters
         ----------
@@ -613,10 +611,10 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
         Returns
         -------
         dict[str, float]
-            Dictionary of derived secondary features.
+            Dictionary of summary statistics for all respiratory cycles.
         """
 
-        from breathmetrics.kernel_secondary import (
+        from breathmetrics.kernel_resp_stats import (
             compute_breath_timing_metrics,
             compute_airflow_metrics,
             compute_duty_cycle_metrics,
@@ -713,7 +711,12 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
                             len(self.exhale_onsets), np.nan, dtype=float
                         )
 
-                airflow = compute_airflow_metrics(self, valid_inhales, valid_exhales)
+                airflow = compute_airflow_metrics(
+                    self,
+                    valid_inhales,
+                    valid_exhales,
+                    timing["inter_breath_interval"],
+                )
                 duty = compute_duty_cycle_metrics(
                     self, valid_inhales, valid_exhales, timing["inter_breath_interval"]
                 )
@@ -726,11 +729,16 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
 
         # 5. Optional printing
         if verbose:
-            print("\nSecondary Respiratory Features:")
+            print("\nRespiratory Summary Statistics:")
             for k, v in summary.items():
                 print(f"{k:40s}: {v:.5g}")
 
         return summary
+
+    def refresh_derived_features_after_edit(self) -> None:
+        """Refresh derived outputs after GUI event edits or breath rejection."""
+        self.find_shape_features()
+        self._set_feature("resp_stats", self.get_resp_stats(), status="edited")
 
     ## ERPS
     def compute_erp(
@@ -860,7 +868,7 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
 
     ## esitmate all features. call all methods in order.
     def estimate_all_features(
-        self, *, compute_secondary: bool = False, verbose: bool = False
+        self, *, compute_resp_stats: bool = False, verbose: bool = False
     ) -> None:
         """
         Run the full BreathMetrics feature estimation pipeline in the correct order.
@@ -868,8 +876,9 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
 
         Parameters
         ----------
-        compute_secondary : bool
-            If True, also compute and store secondary summary features.
+        compute_resp_stats : bool
+            If True, also compute and store summary statistics of all respiratory
+            cycles in the recording.
         verbose : bool
             If True, print simple progress messages.
         """
@@ -910,6 +919,9 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
 
             # 5) Volume
             self.find_resp_volume()
+
+            # 6) Per-breath waveform-shape features
+            self.find_shape_features()
         else:
             # Non-airflow: infer onsets from extrema only
             self._infer_onsets_from_extrema()
@@ -919,14 +931,14 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
                 else None
             )
 
-        # 6) Secondary summary (optional)
-        if compute_secondary:
-            secondary = self.get_secondary_respiratory_features(verbose=verbose)
-            self._set_feature("secondary_features", secondary, status="computed")
+        # 7) Summary statistics of all respiratory cycles in the recording (optional)
+        if compute_resp_stats:
+            resp_stats = self.get_resp_stats(verbose=verbose)
+            self._set_feature("resp_stats", resp_stats, status="computed")
 
         ignore = set()
-        if not compute_secondary:
-            ignore.add("secondary_features")
+        if not compute_resp_stats:
+            ignore.add("resp_stats")
         self.feature_estimations_complete = self.check_feature_estimations(
             ignore=ignore
         )

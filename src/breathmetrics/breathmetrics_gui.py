@@ -806,6 +806,16 @@ class BreathMetricsMainWindow(QMainWindow):
         self._select_breath(i)
 
     def _save_and_close(self) -> None:
+        try:
+            self.bm.refresh_derived_features_after_edit()
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Unable to Save Changes",
+                f"Derived features could not be recalculated:\n{exc}",
+            )
+            return
+        self.editor.commit()
         self._save_on_close = True
         setattr(self.bm, "_gui_save_requested", True)
         self.close()

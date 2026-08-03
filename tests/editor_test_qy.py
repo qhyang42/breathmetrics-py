@@ -12,7 +12,7 @@ resp = data["resp"].values
 fs = 1000
 time = np.arange(resp.size) / fs  # type: ignore
 bm_obj = breathmetrics.Breathe(data, fs, "humanAirflow")
-bm_obj.estimate_all_features(verbose=True, compute_secondary=False)
+bm_obj.estimate_all_features(verbose=True, compute_resp_stats=False)
 
 # %% init
 

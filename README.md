@@ -20,7 +20,7 @@ This package is a Python reimplementation and extension of the original MATLAB B
 ## ✨ Features
 
 ### Core analysis
-- Automated estimation of primary and secondary breathing features
+- Automated estimation of primary breathing features and summary statistics of all respiratory cycles in the recording
 - Support for human respiratory signals (Test performed on human airflow data only)
 
 ### Visualization
@@ -71,7 +71,7 @@ fs = 1000
 bmobj = breathmetrics.Breathe(data, fs, "humanAirflow")
 
 # estimate features
-bmobj.estimate_all_features(verbose=True, compute_secondary=True)
+bmobj.estimate_all_features(verbose=True, compute_resp_stats=True)
 
 # visualize
 bmobj.plot_features()
@@ -99,5 +99,4 @@ breathmetrics info results/bm.pkl
 breathmetrics inspect results/bm.pkl
 
 ```
-
 

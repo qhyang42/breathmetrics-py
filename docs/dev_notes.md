@@ -5,7 +5,7 @@
 9/30/2025 legacy onset detection added and tested 
 10/1/2025 add primary core function added and working. behavior is slightly different from original breathmetrics? 
 10/3/2025 added my pause detection method 
-10/14/2025 add core logic and secondary methods. 
+10/14/2025 add core logic and respiratory summary-statistics methods.
 11/3/2025 start adding plotting method. skipped ERP.
 11/4/2025 feature plotting. need to add the part that plots annotations. (annotation from the GUI?). 
 11/13/2025 ready for GUI and CLI. parts skipped: annotation in feature plotting, ERP plotting, ERP estimate in core, estimate all features in core. 
@@ -36,10 +36,10 @@ find onsets and pauses. this will have to be modified to new functions *wrote, n
 find inhale and exhale offsets *wrote, no test*
 find pause 
 calculate inhale and exhale volume 
-### secondary 
-calculate secondary features 
+### summary statistics of all respiratory cycles in the recording
+calculate summary statistics of all respiratory cycles in the recording
 calculate resp phase 
-print secondary features (util?)
+print summary statistics of all respiratory cycles in the recording (util?)
 check if features are estimated (util?)
 ## ERPs and summary stats 
 calculate ERP 
@@ -99,6 +99,3 @@ def greet():
 > This is a quote
 
 ---
-
-
-

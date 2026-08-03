@@ -1,15 +1,39 @@
-## secondary features and ERP calculations
+## Summary statistics of all respiratory cycles in the recording and shape calculations
 from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-# secondary feature calculation.
+# Summary statistics of all respiratory cycles in the recording.
 # breathing rate
 # inter-breath interval
 # coef of variation of breathing rate
 
-# airflow specific secondary features
+# Airflow-specific summary statistics of all respiratory cycles in the recording
 # mean inhale/exhale rate/volumes, tidal volumes, minute ventilations, duty cycle
+
+
+def _finite_mean(values) -> float:
+    values = np.asarray(values, dtype=float)
+    finite = values[np.isfinite(values)]
+    return float(np.mean(finite)) if finite.size else np.nan
+
+
+def _finite_cv(values, mean: float) -> float:
+    values = np.asarray(values, dtype=float)
+    finite = values[np.isfinite(values)]
+    if finite.size == 0 or not np.isfinite(mean) or mean == 0:
+        return np.nan
+    return float(np.std(finite) / mean)
+
+
+def _pause_summary(values) -> tuple[float, float]:
+    values = np.asarray(values, dtype=float)
+    if values.size == 0:
+        return np.nan, np.nan
+    present = values[np.isfinite(values)]
+    fraction = float(present.size / values.size)
+    average = float(np.mean(present) * fraction) if present.size else 0.0
+    return fraction, average
 
 
 def compute_breath_timing_metrics(inhale_onsets, valid_inhales, srate: float):
@@ -41,33 +65,44 @@ def compute_breath_timing_metrics(inhale_onsets, valid_inhales, srate: float):
 
 def exclude_outliers(values, valid_inds, n_std: float = 2.0):
     """Return valid values excluding outliers beyond ±n_std."""
-    if len(values) == 0:
+    values = np.asarray(values, dtype=float)
+    valid_inds = np.asarray(valid_inds, dtype=int)
+    valid_inds = valid_inds[(valid_inds >= 0) & (valid_inds < values.size)]
+    valid_values = values[valid_inds]
+    if valid_values.size == 0:
         return np.array([])
-    mean = np.nanmean(values)
-    std = np.nanstd(values)
-    mask = (values > mean - n_std * std) & (values < mean + n_std * std)
-    valid_mask = np.zeros_like(mask)
-    valid_mask[valid_inds] = True
-    return values[mask & valid_mask]
+    finite_values = valid_values[np.isfinite(valid_values)]
+    if finite_values.size == 0:
+        return finite_values
+    mean = np.mean(finite_values)
+    std = np.std(finite_values)
+    if std == 0:
+        return finite_values
+    mask = (finite_values > mean - n_std * std) & (finite_values < mean + n_std * std)
+    return finite_values[mask]
 
 
-def compute_airflow_metrics(bm, valid_inhales, valid_exhales):
+def compute_airflow_metrics(
+    bm, valid_inhales, valid_exhales, inter_breath_interval: float
+):
     """Compute average flow rates, volumes, tidal volume, and ventilation."""
     valid_inhale_flows = exclude_outliers(bm.peak_inspiratory_flows, valid_inhales)
     valid_exhale_flows = exclude_outliers(bm.trough_expiratory_flows, valid_exhales)
     valid_inhale_vols = exclude_outliers(bm.inhale_volumes, valid_inhales)
     valid_exhale_vols = exclude_outliers(bm.exhale_volumes, valid_exhales)
 
-    avg_inhale_flow = np.nanmean(valid_inhale_flows)
-    avg_exhale_flow = np.nanmean(valid_exhale_flows)
-    avg_inhale_vol = np.nanmean(valid_inhale_vols)
-    avg_exhale_vol = np.nanmean(valid_exhale_vols)
+    avg_inhale_flow = _finite_mean(valid_inhale_flows)
+    avg_exhale_flow = _finite_mean(valid_exhale_flows)
+    avg_inhale_vol = _finite_mean(valid_inhale_vols)
+    avg_exhale_vol = _finite_mean(valid_exhale_vols)
     avg_tidal = avg_inhale_vol + avg_exhale_vol
     minute_vent = (
-        bm.srate / np.nanmean(np.diff(bm.inhale_onsets)) * avg_tidal
-    )  # breathing_rate × tidal
+        avg_tidal / inter_breath_interval
+        if np.isfinite(inter_breath_interval) and inter_breath_interval > 0
+        else np.nan
+    )
 
-    cv_tidal = np.nanstd(valid_inhale_vols) / np.nanmean(valid_inhale_vols)
+    cv_tidal = _finite_cv(valid_inhale_vols, avg_inhale_vol)
 
     return {
         "avg_inhale_flow": avg_inhale_flow,
@@ -84,39 +119,26 @@ def compute_duty_cycle_metrics(
     bm, valid_inhales, valid_exhales, inter_breath_interval: float
 ):
     """Compute duty cycles and coefficients of variation for inhale/exhale phases."""
-    avg_inhale_dur = np.nanmean(bm.inhale_durations)
-    avg_exhale_dur = np.nanmean(bm.exhale_durations)
+    inhale_durations = np.asarray(bm.inhale_durations, dtype=float)[valid_inhales]
+    exhale_durations = np.asarray(bm.exhale_durations, dtype=float)[valid_exhales]
+    inhale_pauses = np.asarray(bm.inhale_pause_durations, dtype=float)[valid_inhales]
+    exhale_pauses = np.asarray(bm.exhale_pause_durations, dtype=float)[valid_exhales]
 
-    pct_inhale_pause = np.sum(~np.isnan(bm.inhale_pause_durations)) / len(valid_inhales)
-    avg_inhale_pause = (
-        np.nanmean(bm.inhale_pause_durations[valid_inhales]) * pct_inhale_pause
-    )
+    avg_inhale_dur = _finite_mean(inhale_durations)
+    avg_exhale_dur = _finite_mean(exhale_durations)
 
-    pct_exhale_pause = np.sum(~np.isnan(bm.exhale_pause_durations)) / len(valid_exhales)
-    avg_exhale_pause = (
-        np.nanmean(bm.exhale_pause_durations[valid_exhales]) * pct_exhale_pause
-    )
-
-    avg_inhale_pause = 0 if np.isnan(avg_inhale_pause) else avg_inhale_pause
-    avg_exhale_pause = 0 if np.isnan(avg_exhale_pause) else avg_exhale_pause
+    pct_inhale_pause, avg_inhale_pause = _pause_summary(inhale_pauses)
+    pct_exhale_pause, avg_exhale_pause = _pause_summary(exhale_pauses)
 
     inhale_dc = avg_inhale_dur / inter_breath_interval
     exhale_dc = avg_exhale_dur / inter_breath_interval
     inhale_pause_dc = avg_inhale_pause / inter_breath_interval
     exhale_pause_dc = avg_exhale_pause / inter_breath_interval
 
-    cv_inhale_dur = np.nanstd(bm.inhale_durations) / avg_inhale_dur
-    cv_inhale_pause = (
-        np.nanstd(bm.inhale_pause_durations) / avg_inhale_pause
-        if avg_inhale_pause
-        else np.nan
-    )
-    cv_exhale_dur = np.nanstd(bm.exhale_durations) / avg_exhale_dur
-    cv_exhale_pause = (
-        np.nanstd(bm.exhale_pause_durations) / avg_exhale_pause
-        if avg_exhale_pause
-        else np.nan
-    )
+    cv_inhale_dur = _finite_cv(inhale_durations, avg_inhale_dur)
+    cv_inhale_pause = _finite_cv(inhale_pauses, avg_inhale_pause)
+    cv_exhale_dur = _finite_cv(exhale_durations, avg_exhale_dur)
+    cv_exhale_pause = _finite_cv(exhale_pauses, avg_exhale_pause)
 
     return {
         "inhale_dc": inhale_dc,
@@ -179,7 +201,7 @@ def assemble_respiratory_summary(datatype, timing, airflow, duty):
     return base
 
 
-### additional secondary features from Sagar et al. 2025 Nat. Hum. Behav.
+### Per-cycle waveform shape features from Sagar et al. 2025 Nat. Hum. Behav.
 ### these are calculated for breathing phases, not the whole signal.
 def calculate_smoothness(signal, fs) -> float:
     """
