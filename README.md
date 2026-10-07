@@ -100,3 +100,20 @@ breathmetrics inspect results/bm.pkl
 
 ```
 
+
+## ZLP segmentation for difficult recordings
+
+For amplitude-non-stationary recordings (drifting baselines, breathing depth
+that changes several-fold between task blocks, paced or very slow breathing)
+where the stock extrema and onset detection struggle, use the ZLP
+segmentation front end, ported from the Zelano Lab preprocessing pipeline
+with exact landmark parity to its MATLAB counterpart:
+
+```python
+bmobj.estimate_all_features_zlp()   # instead of estimate_all_features()
+```
+
+Segmentation (validity-ruled extrema + a slope-walk "kneeBacktrack" inhale
+onset) runs on an internally conditioned copy of the signal; every
+downstream feature is computed by the usual pipeline in the signal's native
+units. See [docs/zlp_segmentation.md](docs/zlp_segmentation.md).

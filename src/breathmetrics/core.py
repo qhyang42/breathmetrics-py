@@ -14,6 +14,7 @@ import breathmetrics.kernel_onset_detection_methods
 import breathmetrics.kernel_plot
 import breathmetrics.kernel_primary
 import breathmetrics.kernel_resp_stats
+import breathmetrics.kernel_zlp
 import breathmetrics.utils
 
 FloatArray = NDArray[np.float64]
@@ -460,6 +461,141 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
             )
         )
         self._set_feature("exhale_pause_onsets", exhale_pause_onsets)
+
+    # ZLP segmentation (kernel_zlp.py; spec in docs/zlp_segmentation.md):
+    # validity-ruled extrema + slope-walk kneeBacktrack inhale onsets,
+    # developed for amplitude-non-stationary recordings. Detection runs on an
+    # internally conditioned, windowed-normalized copy of raw_respiration -
+    # the object's traces (and therefore all downstream features, volumes
+    # included) stay in the signal's native units.
+    def find_extrema_and_onsets_zlp(
+        self,
+        *,
+        floor_frac: float = 0.05,
+        blank_below_frac: float | None = None,
+        sigh_span: tuple[int, int] | None = None,
+    ) -> None:
+        if self.capability != CAPABILITY_AIRFLOW:
+            raise ValueError(
+                f"ZLP segmentation supports airflow data types only, not {self.datatype}"
+            )
+        raw = cast(FloatArray, self.raw_respiration)
+        det, pk0, tr0, info = breathmetrics.kernel_zlp.prep_breath_trace(
+            raw,
+            self.srate,
+            "conservative",
+            blank_below_frac,
+            sigh_span,
+            floor_frac,
+        )
+        onsets, pk_p, tr_p = breathmetrics.kernel_zlp.find_inhale_onsets(
+            det, self.srate, pk0, tr0, "kneeBacktrack", 0.4, 1.25, 0.50, 0.10
+        )
+        # equal-length per-inhale arrays (final inhales without a following
+        # trough are dropped), so every per-breath feature stays aligned
+        onsets, pk_a, tr_a = breathmetrics.kernel_zlp.pair_breath_landmarks(
+            onsets, pk_p, tr_p
+        )
+        if onsets.size < 3:
+            raise ValueError(
+                f"only {onsets.size} breaths detected - not a usable respiration trace"
+            )
+        self._set_feature("signal_peaks", pk_a)
+        self._set_feature("signal_troughs", tr_a)
+        self._set_feature("inhale_peaks", pk_a)
+        self._set_feature("exhale_troughs", tr_a)
+        self._set_feature("inhale_onsets", onsets)
+        # QC stash (not a registry feature): the detection trace + prep output
+        self.zlp_detection = {
+            "det": det,
+            "info": info,
+            "prep_peaks": pk0,
+            "prep_troughs": tr0,
+        }
+
+    def estimate_all_features_zlp(
+        self,
+        *,
+        compute_resp_stats: bool = False,
+        verbose: bool = False,
+        floor_frac: float = 0.05,
+        blank_below_frac: float | None = None,
+        sigh_span: tuple[int, int] | None = None,
+    ) -> None:
+        """estimate_all_features with the ZLP segmentation front end.
+
+        Same pipeline order as estimate_all_features, with extrema and
+        inhale onsets coming from the ZLP engine: baseline -> ZLP extrema +
+        onsets -> legacy onset/pause pass on the ZLP extrema (for exhale
+        onsets and pauses; its inhale onsets are then replaced by the ZLP
+        ones and any legacy inhale-pause onset the ZLP onsets contradict is
+        dropped) -> slope-based exhale pauses -> offsets -> durations ->
+        volumes -> shape features. Airflow data types only.
+        """
+        if verbose:
+            print("BreathMetrics: estimating all features (ZLP segmentation)...")
+        if self.capability != CAPABILITY_AIRFLOW:
+            raise ValueError(
+                f"ZLP segmentation supports airflow data types only, not {self.datatype}"
+            )
+        self.correct_resp_to_baseline()
+        self.find_extrema_and_onsets_zlp(
+            floor_frac=floor_frac,
+            blank_below_frac=blank_below_frac,
+            sigh_span=sigh_span,
+        )
+        zlp_onsets = np.asarray(self.inhale_onsets, dtype=int).copy()
+
+        # legacy pass on the ZLP extrema: keeps its exhale onsets + pause
+        # estimates, its inhale onsets are replaced by the ZLP ones below
+        self.find_onsets_and_pauses()
+        self._set_feature("inhale_onsets", zlp_onsets)
+
+        # drop any legacy inhale-pause onset the ZLP onsets contradict: an
+        # inhale pause must fall strictly between the breath's peak and its
+        # exhale onset
+        missing = breathmetrics.utils.MISSING_EVENT
+        in_pause = np.asarray(self.inhale_pause_onsets, dtype=int).copy()
+        pk_a = np.asarray(self.inhale_peaks, dtype=int)
+        ex_on = np.asarray(self.exhale_onsets, dtype=int)
+        for bi in range(in_pause.size):
+            if in_pause[bi] == missing:
+                continue
+            if (
+                bi >= ex_on.size
+                or in_pause[bi] <= pk_a[bi]
+                or in_pause[bi] >= ex_on[bi]
+            ):
+                in_pause[bi] = missing
+        self._set_feature("inhale_pause_onsets", in_pause)
+
+        # slope-based exhale pauses recomputed from the ZLP onsets
+        self.find_pause_slope()
+        self.find_respiratory_offsets()
+
+        self.is_valid = (
+            np.ones(len(self.inhale_onsets), dtype=bool)
+            if self.inhale_onsets is not None
+            else None
+        )
+
+        self.find_resp_durations()
+        self.find_time2peaktrough()
+        self.find_resp_volume()
+        self.find_shape_features()
+
+        if compute_resp_stats:
+            resp_stats = self.get_resp_stats(verbose=verbose)
+            self._set_feature("resp_stats", resp_stats, status="computed")
+
+        ignore = set()
+        if not compute_resp_stats:
+            ignore.add("resp_stats")
+        self.feature_estimations_complete = self.check_feature_estimations(
+            ignore=ignore
+        )
+        if verbose:
+            print("BreathMetrics: done (ZLP segmentation).")
 
     def find_time2peaktrough(self):
         self._require_features(
