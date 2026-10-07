@@ -307,7 +307,10 @@ def find_respiratory_offsets(
     # last exhale is different becuase there is no next inhale onset
     finalwindow = x[exh_on[-1] :]
     putativeexhaleidx = np.where(np.diff(finalwindow) > 0)[0]
-    putativeexhaleoffset = np.where(np.diff(finalwindow) > 0)[0][0]
+    # the trace may never rise again after the last exhale onset (recording
+    # ends mid-exhale): the emptiness check below already handles that case,
+    # but unconditional [0] indexing crashed before reaching it
+    putativeexhaleoffset = int(putativeexhaleidx[0]) if putativeexhaleidx.size else -1
 
     # check if there's an actual exhale end that it's not artifact
     valid_exh = exhale_offsets[:-1] >= 0

@@ -78,7 +78,9 @@ def find_onsets_and_pauses_legacy(
     tail_onset_lims = np.floor(np.mean(np.diff(peaks)))
 
     if peaks[0] > tail_onset_lims:
-        first_zero_crossings_bound = peaks[0] - tail_onset_lims
+        # int(): tail_onset_lims is a float (np.floor), and a float bound
+        # makes the slice below raise TypeError
+        first_zero_crossings_bound = int(peaks[0] - tail_onset_lims)
     else:
         first_zero_crossings_bound = 1
 
@@ -118,7 +120,17 @@ def find_onsets_and_pauses_legacy(
             this_inhale_thr = simple_zero_crossing
             possible_inhale_ind = inhale_window < this_inhale_thr
             mask = possible_inhale_ind == 1
-            inhale_onset = np.where(mask)[0][-1]
+            if mask.any():
+                inhale_onset = np.where(mask)[0][-1]
+            else:
+                # on signals with baseline drift or a large DC offset the
+                # whole trough-to-peak window can sit above the GLOBAL mean,
+                # leaving no below-threshold sample (IndexError before this
+                # guard); fall back to the window minimum - the closest
+                # analogue of the last-below-baseline point. Same guard the
+                # head/tail special cases already have, mirrored from the
+                # MATLAB-side fix.
+                inhale_onset = int(np.argmin(inhale_window))
             exhalepauseonsets[thisbreath] = MISSING_EVENT
             inhaleonsets[thisbreath + 1] = inhale_onset + troughs[thisbreath]
 
@@ -168,7 +180,13 @@ def find_onsets_and_pauses_legacy(
             this_exhale_thr = simple_zero_crossing
             possible_exhale_ind = exhale_window > this_exhale_thr
             mask = possible_exhale_ind == 1
-            exhale_onset = np.where(mask)[0][-1]
+            if mask.any():
+                exhale_onset = np.where(mask)[0][-1]
+            else:
+                # mirror of the inhale guard above: a peak-to-trough window
+                # entirely below the GLOBAL mean has no above-threshold
+                # sample; fall back to the window maximum.
+                exhale_onset = int(np.argmax(exhale_window))
             inhalepauseonsets[thisbreath] = MISSING_EVENT
             exhaleonsets[thisbreath] = exhale_onset + peaks[thisbreath]
 
@@ -202,7 +220,8 @@ def find_onsets_and_pauses_legacy(
     # do the last exhale onset because it's not in a peak to peak segment
     # treat it like the first inhale onset
     if len(resp) - peaks[-1] > tail_onset_lims:
-        last_zero_crossings_bound = peaks[-1] + tail_onset_lims
+        # int(): float bound would make the slice below raise TypeError
+        last_zero_crossings_bound = int(peaks[-1] + tail_onset_lims)
     else:
         last_zero_crossings_bound = len(resp)
 
