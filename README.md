@@ -116,4 +116,23 @@ bmobj.estimate_all_features_zlp()   # instead of estimate_all_features()
 Segmentation (validity-ruled extrema + a slope-walk "kneeBacktrack" inhale
 onset) runs on an internally conditioned copy of the signal; every
 downstream feature is computed by the usual pipeline in the signal's native
-units. See [docs/zlp_segmentation.md](docs/zlp_segmentation.md).
+units. Two stages follow the detection:
+
+* **Onset refinement** (on by default, `refine_onsets=True`): every inhale
+  onset is re-placed on the stored trace - at the foot of the rise, past a slow
+  bump that precedes a quick rise, or back from an inflection riding high on a
+  larger inhale - and moved only when the trace shows a definitively better one.
+  Peaks, troughs and the number of breaths do not change.
+  `refine_onsets=False` gives the onsets of the first release of this method.
+* **Incomplete-exhale merge** (off by default,
+  `merge_incomplete_exhales=True`): an inhale that has no exhale since the
+  previous one (double inhales, staircase inhales, bumps in a pause) joins that
+  breath, and every feature is recomputed for each whole merged breath.
+
+```python
+bmobj.estimate_all_features_zlp(merge_incomplete_exhales=True)
+bmobj.zlp_detection["refine"]   # what the refinement did to each onset
+bmobj.zlp_detection["merge"]    # the merge record
+```
+
+See [docs/zlp_segmentation.md](docs/zlp_segmentation.md).

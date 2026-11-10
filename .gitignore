@@ -59,3 +59,6 @@ Desktop.ini
 *.h5
 *.npy
 *.npz
+
+# the small MATLAB reference of tests/test_zlp_refine_merge.py
+!tests/zlp_reference/*.npz
