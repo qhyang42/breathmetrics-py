@@ -467,13 +467,21 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
     # developed for amplitude-non-stationary recordings. Detection runs on an
     # internally conditioned, windowed-normalized copy of raw_respiration -
     # the object's traces (and therefore all downstream features, volumes
-    # included) stay in the signal's native units.
+    # included) stay in the signal's native units. Two stages follow the
+    # detection: the onset refinement (every inhale onset re-placed on the
+    # stored trace, on by default) and, optionally, the incomplete-exhale
+    # merge (inhales with no exhale since the previous one join that breath).
     def find_extrema_and_onsets_zlp(
         self,
         *,
         floor_frac: float = 0.05,
         blank_below_frac: float | None = None,
         sigh_span: tuple[int, int] | None = None,
+        refine_onsets: bool = True,
+        refine_opts: Mapping[str, Any] | None = None,
+        merge_incomplete_exhales: bool = False,
+        merge_ex_frac: float = 0.20,
+        merge_opts: Mapping[str, Any] | None = None,
     ) -> None:
         if self.capability != CAPABILITY_AIRFLOW:
             raise ValueError(
@@ -491,6 +499,13 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
         onsets, pk_p, tr_p = breathmetrics.kernel_zlp.find_inhale_onsets(
             det, self.srate, pk0, tr0, "kneeBacktrack", 0.4, 1.25, 0.50, 0.10
         )
+        refine_record = None
+        if refine_onsets:
+            # re-place the onsets on the stored trace (peaks / troughs are
+            # unchanged); raises ValueError on an inconsistent result
+            onsets, refine_record = breathmetrics.kernel_zlp.apply_onset_refinement(
+                raw, self.srate, onsets, pk_p, tr_p, refine_opts
+            )
         # equal-length per-inhale arrays (final inhales without a following
         # trough are dropped), so every per-breath feature stays aligned
         onsets, pk_a, tr_a = breathmetrics.kernel_zlp.pair_breath_landmarks(
@@ -500,6 +515,17 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
             raise ValueError(
                 f"only {onsets.size} breaths detected - not a usable respiration trace"
             )
+        merge_record = None
+        if merge_incomplete_exhales:
+            # one breath per merged breath: landmarks of the merged breaths
+            # (plus the last paired inhale) replace the per-inhale arrays
+            onsets, pk_a, tr_a, merge_record = (
+                breathmetrics.kernel_zlp.merge_paired_landmarks(
+                    raw, self.srate, onsets, pk_a, tr_a, merge_ex_frac, merge_opts
+                )
+            )
+            if onsets.size < 3:
+                raise ValueError(f"only {onsets.size} breaths after the merge")
         self._set_feature("signal_peaks", pk_a)
         self._set_feature("signal_troughs", tr_a)
         self._set_feature("inhale_peaks", pk_a)
@@ -511,6 +537,8 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
             "info": info,
             "prep_peaks": pk0,
             "prep_troughs": tr0,
+            "refine": refine_record,
+            "merge": merge_record,
         }
 
     def estimate_all_features_zlp(
@@ -521,6 +549,11 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
         floor_frac: float = 0.05,
         blank_below_frac: float | None = None,
         sigh_span: tuple[int, int] | None = None,
+        refine_onsets: bool = True,
+        refine_opts: Mapping[str, Any] | None = None,
+        merge_incomplete_exhales: bool = False,
+        merge_ex_frac: float = 0.20,
+        merge_opts: Mapping[str, Any] | None = None,
     ) -> None:
         """estimate_all_features with the ZLP segmentation front end.
 
@@ -531,6 +564,17 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
         ones and any legacy inhale-pause onset the ZLP onsets contradict is
         dropped) -> slope-based exhale pauses -> offsets -> durations ->
         volumes -> shape features. Airflow data types only.
+
+        Two stages follow the detection (see docs/zlp_segmentation.md):
+        ``refine_onsets`` (default True) re-places each inhale onset on the
+        stored trace (``refine_onsets=False`` gives the onsets of the
+        detection as they were; ``refine_opts`` overrides the refinement's
+        options); ``merge_incomplete_exhales`` (default False) joins an
+        inhale that has no exhale since the previous one into that breath
+        (exhale area under ``merge_ex_frac`` of the inhale area; ``merge_opts``
+        overrides the rule's options), so the object holds one breath per
+        merged breath with all features recomputed. The check records are
+        stored in ``zlp_detection["refine"]`` and ``zlp_detection["merge"]``.
         """
         if verbose:
             print("BreathMetrics: estimating all features (ZLP segmentation)...")
@@ -543,6 +587,11 @@ class Breathe:  # this might be too cute. Consider changing back to class Breath
             floor_frac=floor_frac,
             blank_below_frac=blank_below_frac,
             sigh_span=sigh_span,
+            refine_onsets=refine_onsets,
+            refine_opts=refine_opts,
+            merge_incomplete_exhales=merge_incomplete_exhales,
+            merge_ex_frac=merge_ex_frac,
+            merge_opts=merge_opts,
         )
         zlp_onsets = np.asarray(self.inhale_onsets, dtype=int).copy()
 

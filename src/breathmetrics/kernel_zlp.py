@@ -2,7 +2,9 @@
 #
 # Python port of the ZLP (Zelano Lab Preprocessing) segmentation engine
 # contributed to the MATLAB toolbox (breathmetrics_functions/
-# prepBreathTrace_zlp.m and findInhaleOnsets_zlp.m; specification in the
+# prepBreathTrace_zlp.m and findInhaleOnsets_zlp.m, plus the two later
+# stages refineInhaleOnsets_zlp.m and mergeIncompleteExhales_zlp.m;
+# specification in the
 # MATLAB repo's docs/zlp_segmentation.md and this repo's
 # docs/zlp_segmentation.md). Designed for amplitude-non-stationary
 # recordings - drifting baselines, breathing depth that changes several-fold
@@ -23,15 +25,32 @@
 # (660,001 samples @ 1 kHz: 132/132 peaks and troughs, 131/131 onsets,
 # detection trace max |diff| 5e-13).
 #
+# Two stages follow the detection: refine_inhale_onsets re-places every
+# inhale onset on the stored (unnormalized) trace, and merge_incomplete_exhales
+# joins inhales that have no exhale since the previous one into one breath.
+# Both are transcribed from MATLAB with 1-based sample numbers inside (the
+# _pad1 helper); their inputs and outputs are 0-based.
+#
 # All indices are 0-based.
 
 from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from typing import Any, NoReturn
 
 import numpy as np
 from numpy.typing import ArrayLike
 from scipy.signal import find_peaks
 
-__all__ = ["find_inhale_onsets", "pair_breath_landmarks", "prep_breath_trace"]
+__all__ = [
+    "apply_onset_refinement",
+    "find_inhale_onsets",
+    "merge_incomplete_exhales",
+    "merge_paired_landmarks",
+    "pair_breath_landmarks",
+    "prep_breath_trace",
+    "refine_inhale_onsets",
+]
 
 
 # --------------------------------------------------------------------------
@@ -69,10 +88,14 @@ def _centered_bounds(n: int, k: int) -> tuple[np.ndarray, np.ndarray]:
 
 
 def _movmean(x: np.ndarray, k: int) -> np.ndarray:
+    x = np.asarray(x, dtype=float)
     n = x.size
     lo, hi = _centered_bounds(n, k)
-    cs = np.concatenate(([0.0], np.cumsum(x)))
-    return (cs[hi + 1] - cs[lo]) / (hi - lo + 1)
+    # cumulative sums of the de-meaned trace: a trace with a large offset
+    # would otherwise lose several digits in the differences
+    c0 = x.mean()
+    cs = np.concatenate(([0.0], np.cumsum(x - c0)))
+    return (cs[hi + 1] - cs[lo]) / (hi - lo + 1) + c0
 
 
 def _movstd(x: np.ndarray, k: int) -> np.ndarray:
@@ -529,3 +552,1358 @@ def pair_breath_landmarks(
     while on.size and tr_a[-1] < 0:
         on, pk_a, tr_a = on[:-1], pk_a[:-1], tr_a[:-1]
     return on, pk_a, tr_a
+
+    return np.asarray(sorted(onsets), dtype=int), peaks, troughs
+
+
+# --------------------------------------------------------------------------
+# MATLAB-semantics helpers for the refinement / merge ports
+# --------------------------------------------------------------------------
+
+
+def _pad1(a: ArrayLike) -> np.ndarray:
+    """Prepend a dummy element so that ``out[i]`` is MATLAB's ``a(i)``
+    (1-based). The refinement and merge routines are transcribed from
+    MATLAB with 1-based sample numbers; only their inputs and outputs are
+    converted to the 0-based convention of this module."""
+    return np.concatenate(([np.nan], np.asarray(a, dtype=float)))
+
+
+def _seg1(a1: np.ndarray, lo: int, hi: int) -> np.ndarray:
+    """MATLAB ``a(lo:hi)`` on a 1-padded array (inclusive, ``lo >= 1``)."""
+    if lo < 1:
+        raise IndexError(f"index {lo} is outside the trace (1-based)")
+    return a1[lo : hi + 1]
+
+
+def _matlab_colon(a: float, d: float, b: float) -> np.ndarray:
+    """MATLAB ``a:d:b`` for doubles with ``d > 0``. numpy.arange differs in
+    the last bits and, near an integer number of steps, in the length; the
+    histogram bin edges of the zero-flow search are built with this."""
+    eps = np.finfo(float).eps
+    ndbl = np.floor((b - a) / d + 0.5)
+    apnd = a + ndbl * d
+    cdiff = apnd - b
+    if abs(cdiff) < 2.0 * eps * max(abs(a), abs(b)):
+        ndbl += 1
+        apnd = b
+    elif cdiff > 0:
+        apnd = a + (ndbl - 1.0) * d
+    else:
+        ndbl += 1
+    n = int(ndbl) if ndbl >= 0 else 0
+    y = np.empty(n)
+    if n > 0:
+        y[0] = a
+        if n > 1:
+            y[n - 1] = apnd
+            half = (n - 1) >> 1
+            for k in range(half - 1):
+                kd = (k + 1) * d
+                y[k + 1] = a + kd
+                y[n - 2 - k] = apnd - kd
+            if (half << 1) == n - 1:
+                y[half] = (a + apnd) / 2.0
+            else:
+                kd = half * d
+                y[half] = a + kd
+                y[half + 1] = apnd - kd
+    return y
+
+
+def _matlab_prctile(w: ArrayLike, pcts: Sequence[float]) -> list[float]:
+    """MATLAB prctile of a vector without NaNs (midpoint rule: the i-th
+    sorted value is the (i - 0.5)/n quantile, linear in between)."""
+    s = np.sort(np.asarray(w, dtype=float))
+    n = s.size
+    out = []
+    for p in pcts:
+        r = p / 100.0 * n
+        if r < 0.5:
+            out.append(s[0])
+        elif r > n - 0.5:
+            out.append(s[-1])
+        else:
+            k = int(np.floor(r + 0.5))
+            t = r + 0.5 - k
+            out.append((1 - t) * s[k - 1] + t * s[min(k, n - 1)])
+    return out
+
+
+def _fma(a: float, b: float, c: float) -> float:
+    """a*b + c with a single rounding (math.fma needs Python 3.13)."""
+    from fractions import Fraction
+
+    return float(Fraction(float(a)) * Fraction(float(b)) + Fraction(float(c)))
+
+
+def _conv3_same(c: ArrayLike) -> np.ndarray:
+    """MATLAB ``conv(c, [1 1 1]/3, 'same')`` for a vector of counts.
+
+    The values are only used to pick the highest bin, so ties between equal
+    integer sums matter and depend on the floating-point accumulation order.
+    MATLAB's order, as measured against R2026a on random count vectors: up to
+    32 elements ``(c[i+1]*k + c[i]*k) + c[i-1]*k``; above that, the
+    first ``8*((n-1)//8) + 1`` outputs are accumulated with fused
+    multiply-adds, ``fma(c[i-1], k, fma(c[i], k, c[i+1]*k))``, and the
+    rest as before."""
+    c = np.asarray(c, dtype=float)
+    n = c.size
+    k = 1.0 / 3.0
+    z = np.zeros(n + 2)
+    z[1:-1] = c
+    out = (z[1:-1] * k + z[2:] * k) + z[:-2] * k
+    if n > 32:
+        for j in range(8 * ((n - 1) // 8) + 1):
+            out[j] = _fma(z[j], k, _fma(z[j + 1], k, z[j + 2] * k))
+    return out
+
+
+def _interp1_linear_extrap(
+    xg: np.ndarray, yg: np.ndarray, xq: np.ndarray
+) -> np.ndarray:
+    """MATLAB interp1(xg, yg, xq, 'linear', 'extrap') for sorted xg."""
+    j = np.clip(np.searchsorted(xg, xq, side="right") - 1, 0, xg.size - 2)
+    slope = (yg[j + 1] - yg[j]) / (xg[j + 1] - xg[j])
+    return yg[j] + (xq - xg[j]) * slope
+
+
+def _movmedian_shrink(v: ArrayLike, k: int) -> np.ndarray:
+    """MATLAB movmedian(v, k) for odd k with shrinking end windows."""
+    v = np.asarray(v, dtype=float)
+    h = k // 2
+    return np.array([np.median(v[max(0, i - h) : i + h + 1]) for i in range(v.size)])
+
+
+def _local_median(v: np.ndarray, w: int, include_self: bool) -> np.ndarray:
+    """Median of the finite values within +-w entries (the entry itself
+    excluded unless ``include_self``); NaN when none."""
+    n = v.size
+    m = np.full(n, np.nan)
+    for k in range(n):
+        a = max(0, k - w)
+        b = min(n - 1, k + w)
+        win = v[a : b + 1].copy()
+        if not include_self:
+            win[k - a] = np.nan
+        win = win[np.isfinite(win)]
+        if win.size:
+            m[k] = np.median(win)
+    return m
+
+
+def _median_finite(a: ArrayLike) -> float:
+    a = np.asarray(a, dtype=float)
+    a = a[np.isfinite(a)]
+    return 0.0 if a.size == 0 else float(np.median(a))
+
+
+def _nanmedian(a: ArrayLike) -> float:
+    a = np.asarray(a, dtype=float)
+    a = a[~np.isnan(a)]
+    return np.nan if a.size == 0 else float(np.median(a))
+
+
+def _check_options(
+    user: Mapping[str, Any] | None, defaults: Mapping[str, Any], who: str
+) -> dict[str, Any]:
+    o = dict(defaults)
+    if user is not None:
+        for key, val in dict(user).items():
+            if key not in o:
+                raise ValueError(f"{who}: unknown option {key!r}")
+            o[key] = val
+    return o
+
+
+# --------------------------------------------------------------------------
+# Stage 4: onset refinement  (port of refineInhaleOnsets_zlp.m)
+# --------------------------------------------------------------------------
+
+REFINE_VERSION = "refineInhaleOnsets_zlp 2026-10-29a"
+
+_REFINE_DEFAULTS = {
+    "level_smooth_ms": 40,  # levels are read from this moving mean
+    "scales_ms": (
+        40,
+        80,
+        160,
+        300,
+    ),  # slope scales (moving mean + central-difference span)
+    "snr_min": 5,  # a scale is usable when its steepest slope >= snr_min x local slope noise
+    "noise_win_sec": 10,
+    "noise_sigmas": 2,  # noise window (+- s); foot slope threshold >= noise_sigmas x noise
+    "bias_frac": 0.2,  # foot moved forward by bias_frac x scale (moving-mean footprint)
+    "back_ms": 200,  # rule 1 searches from onset - back_ms ...
+    "min_rise_ms": 100,  # ... to peak - min_rise_ms
+    "guard_ms": 50,  # never closer than this after the previous peak
+    "trough_tol_ms": 0,  # never earlier than the pair's trough minus this
+    "foot_frac": 0.05,
+    "dwell_ms": 50,  # foot: slope < foot_frac x steepest for dwell_ms
+    "far_tau_sec": 2.5,  # proximity weight exp(-(p - t)/far_tau_sec) of the steepest rise
+    "far_mult": 1.5,
+    "far_min_sec": 0.8,
+    "far_skip_frac": 0.40,  # rule 2
+    "min_shift_ms": 20,  # smaller moves are not made
+    "skip_rise_frac": 0.15,  # a forward move may skip at most this x amplitude of level ...
+    "skip_slope_frac": 0.45,  # ... and at most skip_steep_frac x amplitude when the skipped stretch is steep
+    "skip_steep_frac": 0.05,
+    "earlier_rise_frac": 0.25,  # an earlier rise counts when its slope >= this x the steepest
+    "level_win_breaths": 8,  # rule 2: neighbours each side for the median rise time
+    "level_band_frac": 0.30,
+    "level_gain_frac": 0.10,
+    "low_margin_frac": 1.0,  # rule 3 (whole-trace band)
+    "level_ref_mode": "session",
+    "level_margin_frac": 0.15,  # 'local' = neighbour reference of an earlier version
+    "level_guard": "pause",
+    "level_guard_sec": 0.5,  # rule 3 guard: 'pause' | 'rise' | 'none'
+    "level_rise_frac": 0.10,
+    "level_pause_frac": 0.15,
+    "level_pause_level_frac": 0.25,
+    "level_trough_frac": 0.35,
+    "level_trough_win_sec": 1.0,
+}
+
+
+class _RefineCtx:
+    """The traces and options shared by the foot searches of one call.
+    ``s`` and the entries of ``D`` are 1-padded (see ``_pad1``)."""
+
+    def __init__(
+        self,
+        s: np.ndarray,
+        D: list[np.ndarray],
+        fs: float,
+        o: dict[str, Any],
+        dwell: int,
+        NZ: np.ndarray | None = None,
+    ) -> None:
+        self.s, self.D, self.fs, self.o, self.dwell, self.NZ = s, D, fs, o, dwell, NZ
+
+
+def _foot_multi(
+    ctx: _RefineCtx, k: int, lo: int, hi: int, p: int
+) -> tuple[float, float, int | None]:
+    """Foot of the steepest (proximity-weighted) rise in [lo, hi] at the
+    finest usable slope scale. Returns (foot, slope, scale index); NaN /
+    None = none."""
+    o, fs = ctx.o, ctx.fs
+    if hi < lo:
+        return np.nan, np.nan, None
+    seg = np.arange(lo, hi + 1)
+    w = np.exp(-np.maximum(0, p - seg) / fs / o["far_tau_sec"])
+    for q in range(len(o["scales_ms"])):
+        dq = ctx.D[q]
+        nz = ctx.NZ[k, q]
+        vals = dq[lo : hi + 1] * w
+        j = int(np.argmax(vals))
+        if not vals[j] > 0:
+            continue
+        m = lo + j
+        dmq = dq[m]
+        if dmq < o["snr_min"] * nz:
+            continue
+        thr = np.fmax(o["foot_frac"] * dmq, o["noise_sigmas"] * nz)
+        low = dq[lo : m + 1] < thr
+        ok_run = _movsum_trailing(low.astype(float), ctx.dwell) == ctx.dwell
+        ok_run[: min(ok_run.size, ctx.dwell - 1)] = False
+        idx = np.nonzero(ok_run)[0]
+        if idx.size == 0:
+            continue
+        f = lo + int(idx[-1])
+        f = min(m - 1, f + _mround(o["bias_frac"] * o["scales_ms"][q] / 1000 * fs))
+        return f, dmq, q
+    return np.nan, np.nan, None
+
+
+def _skipped_slope(d: np.ndarray, a: int, b: int) -> float:
+    """90th percentile (nearest rank) of the slope over [a, b)."""
+    if b <= a:
+        return -np.inf
+    w = np.sort(d[a:b])
+    return w[min(w.size, max(1, int(np.ceil(0.9 * w.size)))) - 1]
+
+
+def _foot_checked(
+    ctx: _RefineCtx,
+    k: int,
+    lo: int,
+    hi: int,
+    p: int,
+    ok: int,
+    skip_frac: float,
+    Ak: float,
+) -> tuple[float, float, int | None]:
+    """Foot of the steepest rise; a forward foot that skips more than
+    ``skip_frac`` x Ak of level above the onset ``ok`` (or more than
+    skip_steep_frac x Ak over a steep stretch) is replaced by the foot of an
+    earlier rise (slope >= earlier_rise_frac of the steepest), up to 3
+    times, else NaN (keep the detection's onset)."""
+    o, s = ctx.o, ctx.s
+    f, dm, sq = _foot_multi(ctx, k, lo, hi, p)
+    if not np.isfinite(f):
+        return f, dm, sq
+    dm0 = dm
+    tries = 0
+    while f > ok and (
+        (s[f] - s[ok]) > skip_frac * Ak
+        or (
+            (s[f] - s[ok]) > o["skip_steep_frac"] * Ak
+            and _skipped_slope(ctx.D[sq], ok, f) > o["skip_slope_frac"] * dm
+        )
+    ):
+        e = f - ctx.dwell
+        if tries >= 3 or e <= lo + 2 * ctx.dwell:
+            return np.nan, np.nan, None
+        f2, d2, q2 = _foot_multi(ctx, k, lo, e, p)
+        if not np.isfinite(f2) or d2 < o["earlier_rise_frac"] * dm0:
+            return np.nan, np.nan, None
+        f, dm, sq = f2, d2, q2
+        tries += 1
+    return f, dm, sq
+
+
+def _foot_level(
+    ctx: _RefineCtx,
+    k: int,
+    lo: int,
+    hi: int,
+    p: int,
+    thr_lvl: float,
+    low_lvl: float,
+    A: float,
+) -> tuple[float, float, int | None]:
+    """Rule 3: foot of the steepest rise; while above ``thr_lvl`` the foot of
+    the earlier rise (never below ``low_lvl``); else the last level crossing
+    at or below ``thr_lvl``, refined to the foot of the rise there."""
+    s, o, fs, dwell = ctx.s, ctx.o, ctx.fs, ctx.dwell
+    f, dm, sq = np.nan, np.nan, None
+    dm0 = np.nan
+    e = hi
+    for it in range(1, 6):
+        f1, d1, q1 = _foot_multi(ctx, k, lo, e, p)
+        if not np.isfinite(f1) or s[f1] < low_lvl:
+            break
+        if it == 1:
+            dm0 = d1
+        f, dm, sq = f1, d1, q1
+        if s[f] <= thr_lvl:
+            return f, dm, sq
+        e = f1 - dwell
+        if e <= lo + 2 * dwell:
+            break
+        if np.max(ctx.D[q1][lo : e + 1]) < o["earlier_rise_frac"] * dm0:
+            break
+    if not np.isfinite(f):
+        f, dm, sq = hi, np.nan, None
+    win = s[lo : f + 1]
+    hit = np.nonzero((win <= thr_lvl) & (win >= low_lvl))[0]
+    if hit.size:
+        c = lo + int(hit[-1])
+        f2, d2, q2 = _foot_multi(ctx, k, lo, min(f, c + _mround(0.15 * fs)), p)
+        if np.isfinite(f2) and f2 <= c and s[f2] >= low_lvl:
+            f, dm, sq = f2, d2, q2
+        else:
+            f, dm, sq = c, np.nan, None
+    else:
+        j = int(np.argmin(win))
+        vmin = win[j]
+        if vmin >= low_lvl and vmin < s[f] - 0.05 * max(A, np.finfo(float).eps):
+            f, dm, sq = lo + j, np.nan, None
+    return f, dm, sq
+
+
+def _confidence_of(
+    s: np.ndarray, d: np.ndarray, f: int, p: int, dm: float, A: float
+) -> float:
+    if not np.isfinite(dm) or dm <= 0:
+        return 0.0
+    fr = min(1.0, max(0.0, (s[p] - s[f]) / max(A, np.finfo(float).eps)))
+    fl = min(1.0, max(0.0, 1 - max(d[f], 0.0) / dm))
+    return fr * fl
+
+
+def _middle_range(x: np.ndarray, frac: float) -> float:
+    """Width of the middle ``frac`` of the values of x (0.30: 65th minus
+    35th percentile; nearest rank)."""
+    v = np.sort(x[np.isfinite(x)])
+    if v.size == 0:
+        return 0.0
+    n = v.size
+    lo = v[min(n, max(1, int(np.ceil((0.5 - frac / 2) * n)))) - 1]
+    hi = v[min(n, max(1, int(np.ceil((0.5 + frac / 2) * n)))) - 1]
+    return float(hi - lo)
+
+
+def refine_inhale_onsets(
+    rsp_stored: ArrayLike,
+    fs: float,
+    onsets: ArrayLike,
+    peaks: ArrayLike,
+    troughs: ArrayLike,
+    opts: Mapping[str, Any] | None = None,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Re-place each inhale onset on the stored respiration trace.
+
+    Port of ``refineInhaleOnsets_zlp.m`` (see ``docs/zlp_segmentation.md``
+    for the rules). The detection finds each onset on a 500-ms moving-mean,
+    30-s-normalized copy of the trace; on the stored trace that onset is
+    often early (the rise starts 0.1-0.3 s later), sits on a small bump
+    ahead of a quick rise, or rides high on a larger inhale. An onset moves
+    only when the trace shows a definitively better one (rules ``'foot'``,
+    ``'far'``, ``'level'``); peaks, troughs and the number of breaths are
+    not changed.
+
+    Parameters
+    ----------
+    rsp_stored : the trace the detection got (raw units, inhale positive;
+        non-finite samples are filled by linear interpolation).
+    fs : sampling rate (Hz).
+    onsets, peaks, troughs : the detection's landmarks, 0-based samples.
+    opts : dict of option overrides (snake_case names of
+        ``REFINE_DEFAULTS``; unknown names raise ``ValueError``).
+
+    Returns
+    -------
+    ``(onsets2, info)``: ``onsets2`` - int array, one refined 0-based onset
+    per input onset; ``info`` - dict aligned with it: ``src_idx``, ``rule``
+    (list of str: '' unchanged | 'foot' | 'far' | 'level', + '+clamp'),
+    ``shift_ms`` (refined - detected, ms), ``confidence``, ``scale_ms``,
+    ``level`` (40-ms-smoothed trace at the onset), ``level_ref``,
+    ``level_margin``, ``amp_local``, ``level_band`` and ``level_band_width``,
+    ``amp_session``, ``amp_breath``, ``level_amp_nb``, ``level_guarded``,
+    ``level_pause_floor``, ``level_trough_refused`` (+ their ``n_`` counts),
+    ``counts`` (``n_foot, n_far, n_level, n_clamp, n_unchanged``), ``opts``
+    and ``version``.
+    """
+    o = _check_options(opts, _REFINE_DEFAULTS, "refine_inhale_onsets")
+    eps = np.finfo(float).eps
+    x = np.asarray(rsp_stored, dtype=float).ravel().copy()
+    if not np.all(np.isfinite(x)):
+        good = np.isfinite(x)
+        idx = np.arange(1, x.size + 1, dtype=float)
+        if good.sum() >= 2:
+            x[~good] = _interp1_linear_extrap(idx[good], x[good], idx[~good])
+        else:
+            x[~good] = 0.0
+    N = x.size
+    # 1-based samples inside; converted back at the end
+    on = np.asarray(onsets, dtype=float).ravel() + 1
+    pk = np.asarray(peaks, dtype=float).ravel() + 1
+    tr = np.asarray(troughs, dtype=float).ravel() + 1
+    nOn = on.size
+    on2 = on.copy()
+    rule = [""] * nOn
+    conf = np.zeros(nOn)
+    scUsed = np.full(nOn, np.nan)
+    if nOn == 0:
+        info = _refine_info(
+            np.arange(0), rule, np.zeros(0), conf, scUsed, None, None, None, None, o
+        )
+        return np.zeros(0, dtype=int), info
+
+    # ---- traces: lightly smoothed levels and multi-scale slopes ----
+    s = _pad1(_movmean(x, max(1, _mround(o["level_smooth_ms"] / 1000 * fs))))
+    nSc = len(o["scales_ms"])
+    D = []
+    HF = []
+    for q in range(nSc):
+        wq = max(1, _mround(o["scales_ms"][q] / 1000 * fs))
+        hq = max(1, _mround(o["scales_ms"][q] / 2000 * fs))
+        sq = _movmean(x, wq)
+        dq = np.zeros(N)
+        dq[hq : N - hq] = (sq[2 * hq :] - sq[: N - 2 * hq]) / (2 * hq / fs)
+        D.append(_pad1(dq))
+        HF.append(_pad1(np.abs(dq - _movmean(dq, max(3, _mround(0.5 * fs))))))
+    dwell = max(2, _mround(o["dwell_ms"] / 1000 * fs))
+    minRise = max(2, _mround(o["min_rise_ms"] / 1000 * fs))
+    back = _mround(o["back_ms"] / 1000 * fs)
+    guard = _mround(o["guard_ms"] / 1000 * fs)
+    tol = _mround(o["trough_tol_ms"] / 1000 * fs)
+    minShift = o["min_shift_ms"] / 1000 * fs
+    ctx = _RefineCtx(s, D, fs, o, dwell)
+
+    # ---- per-breath structure ----
+    P = np.full(nOn, np.nan)
+    PP = np.full(nOn, np.nan)
+    T = np.full(nOn, np.nan)
+    LO = np.full(nOn, np.nan)
+    for k in range(nOn):
+        q = pk[pk > on[k]]
+        if q.size == 0:
+            continue
+        P[k] = q[0]
+        r = pk[pk < on[k]]
+        PP[k] = 1 if r.size == 0 else r[-1]
+        u = tr[(tr < on[k]) & (tr > PP[k])]
+        if u.size:
+            T[k] = u[-1]
+        lo = PP[k] + guard
+        if np.isfinite(T[k]):
+            lo = max(lo, T[k] - tol)
+        LO[k] = max(1, min(lo, on[k]))
+    valid = np.isfinite(P) & (on >= 1) & (on <= N)
+    NZ = np.full((nOn, nSc), np.nan)
+    nw = _mround(o["noise_win_sec"] * fs)
+    for k in np.nonzero(valid)[0]:
+        a = max(1, _mround(on[k]) - nw)
+        b = min(N, _mround(on[k]) + nw)
+        for q in range(nSc):
+            NZ[k, q] = 1.4826 * np.median(HF[q][a : b + 1 : 5])
+    ctx.NZ = NZ
+    A = np.full(nOn, np.nan)
+    for k in np.nonzero(valid)[0]:
+        A[k] = s[_mround(P[k])] - np.min(_seg1(s, _mround(LO[k]), _mround(on[k])))
+
+    # ---- rule 1 'foot': foot of the steepest rise within [onset - back_ms, peak - min_rise] ----
+    for k in np.nonzero(valid)[0]:
+        ok = _mround(on[k])
+        p = _mround(P[k])
+        lo = max(_mround(LO[k]), ok - back)
+        hi = p - minRise
+        if hi <= lo + dwell:
+            continue
+        f, dm, sq = _foot_checked(
+            ctx, k, lo, hi, p, ok, o["skip_rise_frac"], max(A[k], eps)
+        )
+        if not np.isfinite(f) or abs(f - ok) < minShift:
+            continue
+        on2[k] = f
+        rule[k] = "foot"
+        scUsed[k] = o["scales_ms"][sq]
+        conf[k] = _confidence_of(s, D[sq], f, p, dm, A[k])
+
+    # ---- rule 2 'far': onsets far from their peak compared with the neighbours ----
+    rise = np.full(nOn, np.nan)
+    for k in np.nonzero(valid)[0]:
+        rise[k] = (P[k] - on2[k]) / fs
+    riseRef = _local_median(rise, o["level_win_breaths"], False)
+    with np.errstate(invalid="ignore"):
+        far = valid & (rise > np.fmax(o["far_min_sec"], o["far_mult"] * riseRef))
+    for k in np.nonzero(far)[0]:
+        ok = _mround(on2[k])
+        p = _mround(P[k])
+        lo = _mround(LO[k])
+        if np.isfinite(riseRef[k]):
+            lo = max(lo, _mround(p - o["far_mult"] * riseRef[k] * fs))
+        hi = p - minRise
+        if hi <= lo + dwell or lo <= ok:
+            continue
+        f, dm, sq = _foot_checked(
+            ctx, k, lo, hi, p, ok, o["far_skip_frac"], max(A[k], eps)
+        )
+        if not np.isfinite(f) or f - ok < minShift:
+            continue
+        on2[k] = f
+        rule[k] = "far"
+        scUsed[k] = o["scales_ms"][sq]
+        conf[k] = _confidence_of(s, D[sq], f, p, dm, A[k])
+
+    # ---- rule 3 'level': onsets riding high on a larger inhale ----
+    lvl = np.full(nOn, np.nan)
+    for k in np.nonzero(valid)[0]:
+        lvl[k] = s[_mround(on2[k])]
+    medOn = _median_finite(lvl[valid])
+    bandW = _middle_range(x, o["level_band_frac"])
+    Asess = _median_finite(A)
+    if o["level_ref_mode"] == "local":
+        Aloc = _local_median(A, o["level_win_breaths"], True)
+        Aloc[~np.isfinite(Aloc)] = Asess
+        lvlRef = _local_median(lvl, o["level_win_breaths"], False)
+        margin = o["level_margin_frac"] * Aloc
+    else:
+        if o["level_ref_mode"] != "session":
+            raise ValueError("level_ref_mode must be 'session' or 'local'")
+        lvlRef = np.full(nOn, medOn)
+        margin = np.full(nOn, bandW / 2)
+        Aloc = np.full(nOn, Asess)
+    gWin = max(1, _mround(o["level_guard_sec"] * fs))
+    guarded = np.zeros(nOn, dtype=bool)
+    troughRefused = np.zeros(nOn, dtype=bool)
+    pauseFloor = np.zeros(nOn, dtype=bool)
+    tWin = max(1, _mround(o["level_trough_win_sec"] * fs))
+    AlocNb = _local_median(A, o["level_win_breaths"], True)
+    AlocNb[~np.isfinite(AlocNb)] = Asess  # breath size near the onset (pause guard)
+    with np.errstate(invalid="ignore"):
+        cand3 = valid & (lvl > lvlRef + margin)
+    for k in np.nonzero(cand3)[0]:
+        ok = _mround(on2[k])
+        p = _mround(P[k])
+        lo = _mround(LO[k])
+        hi = p - minRise
+        if o["level_guard"] == "pause":
+            we = _seg1(s, max(1, _mround(on[k]) - gWin), _mround(on[k]))
+            if (
+                np.max(we) - np.min(we) <= o["level_pause_frac"] * AlocNb[k]
+                and abs(np.mean(we) - medOn) <= o["level_pause_level_frac"] * AlocNb[k]
+            ):
+                lo = max(lo, _mround(on[k]))
+                pauseFloor[k] = True
+        if hi <= lo + dwell:
+            continue
+        wg = _seg1(s, max(1, ok - gWin), ok)
+        if o["level_guard"] == "rise":
+            if s[ok] - np.min(wg) <= o["level_rise_frac"] * Aloc[k]:
+                guarded[k] = True
+                continue
+        elif o["level_guard"] == "pause":
+            if (
+                np.max(wg) - np.min(wg) <= o["level_pause_frac"] * AlocNb[k]
+                and abs(np.mean(wg) - medOn) <= o["level_pause_level_frac"] * AlocNb[k]
+            ):
+                guarded[k] = True
+                continue
+        elif o["level_guard"] != "none":
+            raise ValueError("level_guard must be 'rise', 'pause' or 'none'")
+        thrLvl = lvlRef[k] + margin[k]
+        lowLvl = lvlRef[k] - o["low_margin_frac"] * Aloc[k]
+        f, dm, sq = _foot_level(ctx, k, lo, hi, p, thrLvl, lowLvl, A[k])
+        if not np.isfinite(f):
+            continue
+        if (
+            o["level_trough_frac"] > 0
+            and medOn - np.min(_seg1(s, max(1, f - tWin), f))
+            >= o["level_trough_frac"] * AlocNb[k]
+        ):
+            troughRefused[k] = (
+                True  # the new onset would come out of an exhale trough: a rebound
+            )
+            continue
+        if (
+            s[f] < s[ok] - o["level_gain_frac"] * max(A[k], eps)
+            and abs(f - ok) >= minShift
+        ):
+            on2[k] = f
+            rule[k] = "level"
+            lvl[k] = s[f]
+            if sq is not None:
+                scUsed[k] = o["scales_ms"][sq]
+                conf[k] = _confidence_of(s, D[sq], f, p, dm, A[k])
+            else:
+                scUsed[k] = np.nan
+                conf[k] = 0.5
+
+    # ---- alternation: strictly between the previous peak and the own peak, strictly ascending ----
+    lastOn = -np.inf
+    for k in range(nOn):
+        lowB = max(lastOn + 1, 1)
+        if np.isfinite(PP[k]):
+            lowB = max(lowB, _mround(PP[k]) + 1)
+        upB = P[k] - 1 if np.isfinite(P[k]) else N
+        if on2[k] < lowB or on2[k] > upB:
+            on2[k] = min(max(on2[k], lowB), upB)
+            if _mround(on2[k]) == _mround(on[k]):
+                rule[k] = ""
+                conf[k] = 0.0
+            else:
+                rule[k] = rule[k] + "+clamp"
+        lastOn = on2[k]
+    on2 = np.array([_mround(v) for v in on2], dtype=float)
+    for k in range(1, nOn):
+        if on2[k] <= on2[k - 1]:
+            on2[k] = _mround(on[k])
+            rule[k] = ""
+            conf[k] = 0.0
+    unchanged = on2 == np.array([_mround(v) for v in on], dtype=float)
+    for k in np.nonzero(unchanged)[0]:
+        rule[k] = ""
+    conf[unchanged] = 0.0
+    scUsed[unchanged] = np.nan
+    shiftMs = (on2 - on) / fs * 1000
+    info = _refine_info(
+        np.arange(nOn), rule, shiftMs, conf, scUsed, lvl, lvlRef, margin, Aloc, o
+    )
+    info["level_band"] = np.array([medOn - bandW / 2, medOn + bandW / 2])
+    info["level_guarded"] = guarded
+    info["n_level_guarded"] = int(guarded.sum())
+    info["level_amp_nb"] = AlocNb
+    info["amp_breath"] = A
+    info["level_pause_floor"] = pauseFloor
+    info["n_level_pause_floor"] = int(pauseFloor.sum())
+    info["level_trough_refused"] = troughRefused
+    info["n_level_trough_refused"] = int(troughRefused.sum())
+    info["level_band_width"] = bandW
+    info["amp_session"] = Asess
+    return (on2 - 1).astype(int), info
+
+
+def _refine_info(
+    src: np.ndarray,
+    rule: list[str],
+    shift_ms: np.ndarray,
+    conf: np.ndarray,
+    sc_used: np.ndarray,
+    lvl: np.ndarray | None,
+    lvl_ref: np.ndarray | None,
+    margin: np.ndarray | None,
+    a_loc: np.ndarray | None,
+    o: Mapping[str, Any],
+) -> dict[str, Any]:
+    counts = {
+        "n_foot": sum(r.startswith("foot") for r in rule),
+        "n_far": sum(r.startswith("far") for r in rule),
+        "n_level": sum(r.startswith("level") for r in rule),
+        "n_clamp": sum("clamp" in r for r in rule),
+        "n_unchanged": sum(r == "" for r in rule),
+    }
+    return {
+        "src_idx": src,
+        "rule": list(rule),
+        "shift_ms": shift_ms,
+        "confidence": conf,
+        "scale_ms": sc_used,
+        "level": lvl,
+        "level_ref": lvl_ref,
+        "level_margin": margin,
+        "amp_local": a_loc,
+        "counts": counts,
+        "opts": dict(o),
+        "version": REFINE_VERSION,
+    }
+
+
+# --------------------------------------------------------------------------
+# Stage 5: incomplete-exhale merge  (port of mergeIncompleteExhales_zlp.m)
+# --------------------------------------------------------------------------
+
+MERGE_VERSION = "mergeIncompleteExhales 2026-10-29a"
+
+_MERGE_DEFAULTS = {
+    "minor_frac": 0.10,
+    "dead_frac": 0.05,
+    "blip_smooth_sec": 1,  # step 1
+    "lead_frac": 0.5,
+    "rest_sec": 3,  # step 2
+    "trough_win_sec": 1,
+    "trough_frac": 0.25,
+    "pause_win_sec": 0.5,  # keep rule
+    "pause_frac": 0.15,
+    "pause_level_frac": 0.25,
+    "pause_gap_sec": 0.1,
+    "zero_half_win_sec": 10,
+    "zero_bin_frac": 0.04,
+    "zero_side_frac": 0.10,  # zero-flow level
+    "zero_mass_frac": 0.15,
+    "zero_max_mean": True,
+    "step3_mode": "pairCross",  # measurement only: 'window' = areas over the whole window
+    "keep_rule": "troughPause",  # measurement only: 'first' = keep-first only
+}
+
+
+def _zero_flow_level(
+    x: np.ndarray,
+    fs: float,
+    half_win_sec: float,
+    bin_frac: float,
+    side_frac: float,
+    use_max: bool,
+    mass_frac: float,
+) -> tuple[np.ndarray, str, float]:
+    """Zero-flow level of a nasal-pressure trace = its dwell level: within
+    +-``half_win_sec`` the most frequent level of the 200-ms mean (histogram
+    mode at 25 Hz), accepted only when the trace spends >= ``side_frac`` of
+    the window both above and below it and >= ``mass_frac`` within one bin
+    of it; elsewhere the 60-s moving mean. The higher of the two is used
+    when ``use_max``. Returns ``(z, method text, fraction of the 1-s grid
+    where the dwell level was accepted)``; ``z`` is 0-based, one value per
+    sample."""
+    N = x.size
+    xs = _movmean(x, max(1, _mround(0.2 * fs)))
+    dec = max(1, _mround(fs / 25))
+    xd = xs[::dec]
+    fd = fs / dec
+    Nd = xd.size
+    g = _matlab_colon(1.0, fs, float(N))  # 1-s grid, 1-based samples
+    gd = np.minimum(Nd, np.array([_mround((v - 1) / dec) for v in g]) + 1)
+    hw = _mround(half_win_sec * fd)
+    zg = _movmean(x, _mround(60 * fs))[g.astype(int) - 1]
+    ok = np.zeros(g.size, dtype=bool)
+    zm = np.full(g.size, np.nan)
+    for i in range(g.size):
+        w = xd[max(1, gd[i] - hw) - 1 : min(Nd, gd[i] + hw)]
+        q5, q95 = _matlab_prctile(w, (5, 95))
+        rg = q95 - q5
+        if not rg > 0:
+            continue
+        bw = bin_frac * rg
+        edges = _matlab_colon(w.min() - bw, bw, w.max() + bw)
+        if edges.size < 4:
+            continue
+        c = _conv3_same(np.histogram(w, edges)[0].astype(float))
+        im = int(np.argmax(c))
+        m = (edges[im] + edges[im + 1]) / 2
+        m = np.median(
+            w[np.abs(w - m) <= bw]
+        )  # refine within the peak (no bin-grid bias)
+        up = np.mean(w > m + 2 * bw)
+        dn = np.mean(w < m - 2 * bw)
+        mass = np.mean(np.abs(w - m) <= bw)
+        if up >= side_frac and dn >= side_frac and mass >= mass_frac:
+            ok[i] = True
+            zm[i] = m
+    if ok.any():
+        zf = zm.copy()
+        zf[ok] = _movmedian_shrink(zm[ok], 5)  # over 5 accepted seconds
+        zg[ok] = np.maximum(zf[ok], zg[ok]) if use_max else zf[ok]
+    if g.size < 2:
+        raise ValueError(
+            "the recording is too short for the zero-flow level (needs two 1-s grid points)"
+        )
+    z = _interp1_linear_extrap(g, zg, np.arange(1.0, N + 1))
+    method = (
+        f"dwell level (histogram mode of the 200-ms mean within +-{half_win_sec:g} s, "
+        f"bins {bin_frac:g} x the local range, accepted when >= {side_frac:g} of the "
+        "window lies above and below it), else the 60-s moving mean"
+    )
+    return z, method, float(np.mean(ok))
+
+
+def _pair_areas(
+    r1: np.ndarray, a: int, b: int, s3win: bool
+) -> tuple[float, float, float]:
+    """Inhale area I = sum of r > 0 from ``a`` to the first crossing from
+    above to below zero flow; exhale area E = sum of -r (r < 0) from that
+    crossing to ``b``; no crossing: I over [a, b], E = 0. Returns (I, E,
+    crossing sample or NaN); ``r1`` is 1-padded, samples 1-based."""
+    w = r1[a : b + 1]
+    if s3win:  # the whole-window rule (measurement only)
+        return np.sum(np.maximum(w, 0)), np.sum(np.maximum(-w, 0)), np.nan
+    hit = np.nonzero((w[:-1] > 0) & (w[1:] <= 0))[0]
+    if hit.size == 0:
+        return np.sum(np.maximum(w, 0)), 0.0, np.nan
+    i = int(hit[0]) + 1  # MATLAB's 1-based position of the crossing
+    return np.sum(np.maximum(w[:i], 0)), np.sum(np.maximum(-w[i:], 0)), float(a + i)
+
+
+def merge_incomplete_exhales(
+    resp: ArrayLike,
+    fs: float,
+    onsets: ArrayLike,
+    peaks: ArrayLike,
+    troughs: ArrayLike,
+    ex_frac: float | None = 0.20,
+    opts: Mapping[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """An inhale is not a new breath unless there has been an exhale since
+    the last one.
+
+    Port of ``mergeIncompleteExhales_zlp.m`` (rule text in
+    ``docs/zlp_segmentation.md``): breaths in which a second inhale follows
+    the first without an exhale in between (a double inhale, a staircase
+    inhale, a chain of pulses at slow paced breathing, a small bump in a
+    pause) are joined into one breath. An inhale joins the previous breath
+    when the exhale since the previous inhale is under ``ex_frac`` (20 %) of
+    that inhale, both measured as signal areas of the respiration trace
+    above / below zero flow; pause blips and lead bumps join the breath
+    before; the joined breath keeps its first onset unless that onset is the
+    sensor's rebound off an exhale trough.
+
+    Parameters
+    ----------
+    resp : respiration trace, raw units, inhale positive (NaN tolerated).
+    fs : sampling rate (Hz).
+    onsets : ``m`` ascending 0-based inhale-onset samples. Breath ``k`` is
+        ``[onsets[k], onsets[k+1])``; the last onset only closes the last
+        breath.
+    peaks, troughs : ``m - 1`` samples (one per breath; ``m`` accepted, the
+        last entry ignored).
+    ex_frac : the exhale fraction below which an inhale joins the breath
+        before.
+    opts : dict of overrides of ``MERGE_DEFAULTS`` (snake_case; unknown
+        names raise ``ValueError``).
+
+    Returns
+    -------
+    ``(merged, info)``. ``merged`` - dict with one entry per merged breath:
+    ``onsets, ends, peaks, troughs`` (0-based samples), ``kept_row`` (the
+    input breath whose onset the merged breath keeps), ``n_pulses``,
+    ``n_rows``, ``inhale_area``, ``exhale_area``, ``ex_in_ratio`` (areas of
+    the whole merged breath, signal units x ms), ``orig_rows`` (list of
+    arrays: the input breaths of each merged breath, ascending; first =
+    ``kept_row``). ``info`` - the record of the rule: ``rule`` (text),
+    ``version``, ``n_before``, ``n_after``, ``n_minor``, ``n_lead_bumps``,
+    ``n_merged``, ``n_trough_heads`` and, per input breath, ``is_minor``,
+    ``is_lead_bump``, ``pair_inhale_area``, ``pair_exhale_area``,
+    ``pair_ex_in_ratio``, ``pair_cross_sec``, ``trough_left``,
+    ``pause_left``, ``is_trough_head``, ``is_tail``, ``removal_ratio``,
+    ``engine_onset_sec``, ... (all row indices 0-based).
+    """
+    o = _check_options(opts, _MERGE_DEFAULTS, "merge_incomplete_exhales")
+    if ex_frac is None:
+        ex_frac = 0.20
+    x = _fillmissing_linear(resp)
+    N = x.size
+    on_in = (
+        np.array([_mround(v) for v in np.asarray(onsets, dtype=float).ravel()]) + 1
+    )  # 1-based
+    m = on_in.size
+    if m < 2:
+        raise ValueError("at least two onsets (one breath) are needed")
+    nB = m - 1
+    pk_in = np.array([_mround(v) for v in np.asarray(peaks, dtype=float).ravel()]) + 1
+    tr_in = np.array([_mround(v) for v in np.asarray(troughs, dtype=float).ravel()]) + 1
+    if pk_in.size == m:
+        pk_in = pk_in[:nB]
+    if tr_in.size == m:
+        tr_in = tr_in[:nB]
+    if pk_in.size != nB or tr_in.size != nB:
+        raise ValueError(
+            f"peaks and troughs need one entry per breath ({nB}) or per onset ({m})"
+        )
+    if not (np.all(np.diff(on_in) > 0) and on_in[0] >= 1 and on_in[-1] <= N):
+        raise ValueError("onsets must be strictly ascending samples inside the trace")
+    if not (
+        np.all((pk_in >= 1) & (pk_in <= N)) and np.all((tr_in >= 1) & (tr_in <= N))
+    ):
+        raise ValueError("peaks and troughs must be samples inside the trace")
+
+    resp_raw = x - _movmean(x, _mround(60 * fs))
+    tr_y = resp_raw[tr_in - 1]
+    merged, info = _merge_core(
+        on_in[:nB], on_in[1:], pk_in, tr_in, tr_y, x, fs, ex_frac, o
+    )
+    return merged, info
+
+
+def _merge_core(
+    on_s: np.ndarray,
+    end_s: np.ndarray,
+    pk_s: np.ndarray,
+    tr_s: np.ndarray,
+    tr_y: np.ndarray,
+    x: np.ndarray,
+    fs: float,
+    ex_frac: float,
+    o: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """The rule on the breath table (per-breath 1-based onset, end, peak and
+    trough samples). Rows are numbered from 1 inside (``[0]`` unused) to
+    follow the MATLAB transcription; outputs are 0-based."""
+    dead_frac, minor_frac = o["dead_frac"], o["minor_frac"]
+    lead_frac, rest_sec = o["lead_frac"], o["rest_sec"]
+    nbhd = 10  # rows each side for the local references
+    N = x.size
+    n0 = on_s.size
+    x1 = _pad1(x)
+
+    def rows(a: ArrayLike) -> np.ndarray:  # 1-padded per-row array
+        return np.concatenate(([0], np.asarray(a)))
+
+    on = rows(np.minimum(np.maximum(on_s, 1), N)).astype(int)
+    en = rows(np.minimum(np.maximum(end_s, 1), N)).astype(int)
+    pk = rows(np.minimum(np.maximum(pk_s, 1), N)).astype(int)
+    trs = rows(tr_s).astype(int)
+    trY = rows(tr_y)
+    hiEnd = np.maximum(on, en - 1)  # last sample of each detection window
+
+    # ---- zero-flow level; inhale / exhale area densities (raw, and beyond the noise band) ----
+    z, zmethod, zfrac = _zero_flow_level(
+        x,
+        fs,
+        o["zero_half_win_sec"],
+        o["zero_bin_frac"],
+        o["zero_side_frac"],
+        o["zero_max_mean"],
+        o["zero_mass_frac"],
+    )
+    z1 = _pad1(z)
+    r = _movmean(x, max(1, _mround(0.2 * fs))) - z
+    rp = _pad1(r)
+    swing = np.full(n0 + 1, np.nan)
+    for k in range(1, n0 + 1):
+        w = rp[on[k] : hiEnd[k] + 1]
+        swing[k] = w.max() - w.min()
+    dRow = np.full(n0 + 1, np.nan)
+    for k in range(1, n0 + 1):
+        dRow[k] = dead_frac * _nanmedian(
+            swing[max(1, k - nbhd) : min(n0, k + nbhd) + 1]
+        )
+    dS1 = np.zeros(N + 1)  # noise band per sample (that of its detection row)
+    for k in range(1, n0 + 1):
+        dS1[on[k] : hiEnd[k] + 1] = dRow[k]
+    dS1[1 : on[1]] = dRow[1]
+    dS1[hiEnd[n0] + 1 :] = dRow[n0]
+    dS = dS1[1:]
+    zero = np.zeros(1)
+    cI = np.concatenate(
+        (zero, np.cumsum(np.maximum(r, 0)))
+    )  # window [a, b] sum = c[b] - c[a - 1]
+    cE = np.concatenate((zero, np.cumsum(np.maximum(-r, 0))))
+    r1 = (
+        _movmean(x, max(1, _mround(o["blip_smooth_sec"] * fs))) - z
+    )  # steps 1-2: 1-s mean
+    r1p = _pad1(r1)
+    cIb = np.concatenate((zero, np.cumsum(np.maximum(r1 - dS, 0))))
+    cIb02 = np.concatenate((zero, np.cumsum(np.maximum(r - dS, 0))))
+    cEb = np.concatenate((zero, np.cumsum(np.maximum(-r1 - dS, 0))))
+    cEb02 = np.concatenate((zero, np.cumsum(np.maximum(-r - dS, 0))))
+
+    def areaI(a: int, b: int) -> float:
+        return cI[b] - cI[a - 1]
+
+    def areaE(a: int, b: int) -> float:
+        return cE[b] - cE[a - 1]
+
+    # ---- step 1: pause blips (no inhale, no exhale) join the breath before ----
+    Ik = np.full(n0 + 1, np.nan)
+    Ek = np.full(n0 + 1, np.nan)
+    for k in range(1, n0 + 1):
+        a, b = on[k], hiEnd[k]
+        if b - a >= 4 * fs:
+            Ik[k] = cIb[b] - cIb[a - 1]
+            Ek[k] = cEb[b] - cEb[a - 1]
+        else:
+            Ik[k] = cIb02[b] - cIb02[a - 1]
+            Ek[k] = cEb02[b] - cEb02[a - 1]
+    isMinor = np.zeros(n0 + 1, dtype=bool)
+    for k in range(2, n0 + 1):
+        nb = list(range(max(1, k - nbhd), k)) + list(
+            range(k + 1, min(n0, k + nbhd) + 1)
+        )
+        ref = _nanmedian(Ik[nb])
+        refE = _nanmedian(Ek[nb])
+        isMinor[k] = ref > 0 and Ik[k] < minor_frac * ref and Ek[k] < minor_frac * refE
+    # ---- step 2: a small pulse that only leads into a rest before the next inhale is a pause bump ----
+    pk1 = np.full(n0 + 1, np.nan)
+    for k in range(1, n0 + 1):
+        pk1[k] = rp[on[k] : hiEnd[k] + 1].max()
+    isLead = np.zeros(n0 + 1, dtype=bool)
+    inh0 = [0] + [k for k in range(1, n0 + 1) if not isMinor[k]]
+    nI0 = len(inh0) - 1
+    for j in range(2, nI0):
+        k, kn = inh0[j], inh0[j + 1]
+        a = on[k]
+        b = max(a, on[kn] - 1)
+        nxt = pk1[kn]
+        mm = j + 1  # highest pulse of the run the next inhale starts
+        while mm < nI0:
+            a2 = on[inh0[mm]]
+            b2 = max(a2, on[inh0[mm + 1]] - 1)
+            if areaE(a2, b2) >= ex_frac * areaI(a2, b2):
+                break
+            mm += 1
+            nxt = max(nxt, pk1[inh0[mm]])
+        if areaE(a, b) >= ex_frac * areaI(a, b) or pk1[k] >= lead_frac * nxt:
+            continue
+        if (
+            np.sum(np.abs(r1p[a : b + 1]) <= 2 * dS1[a : b + 1]) / fs >= rest_sec
+        ):  # time at rest in its window
+            isLead[k] = True
+            isMinor[k] = True
+    inh = [0] + [
+        k for k in range(1, n0 + 1) if not isMinor[k]
+    ]  # inhale rows (row 1 always)
+    nI = len(inh) - 1
+
+    # ---- step 3: exhale since the previous inhale vs that inhale ----
+    s3win = o["step3_mode"] == "window"
+    keepFirstOnly = o["keep_rule"] == "first"
+    pairR = np.full(n0 + 1, np.nan)
+    pairI = np.full(n0 + 1, np.nan)
+    pairE = np.full(n0 + 1, np.nan)
+    pairX = np.full(n0 + 1, np.nan)
+    joinI = np.zeros(nI + 1, dtype=bool)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        for j in range(2, nI + 1):
+            a = on[inh[j - 1]]
+            b = max(a, on[inh[j]] - 1)
+            I, E, cx = _pair_areas(rp, a, b, s3win)
+            kk = inh[j - 1]
+            pairI[kk], pairE[kk], pairX[kk] = I, E, cx
+            pairR[kk] = np.float64(E) / np.float64(I)
+            joinI[j] = E < ex_frac * I
+        if nI >= 1:
+            a = on[inh[nI]]
+            b = hiEnd[n0]
+            I, E, cx = _pair_areas(rp, a, b, s3win)
+            kk = inh[nI]
+            pairI[kk], pairE[kk], pairX[kk] = I, E, cx
+            pairR[kk] = np.float64(E) / np.float64(I)
+    # which onset the joined breath keeps (keep rule: see the MATLAB header / docs)
+    troughWin = max(1, _mround(o["trough_win_sec"] * fs))
+    troughFrac = o["trough_frac"]
+    pauseWin = max(1, _mround(o["pause_win_sec"] * fs))
+    pauseFrac = o["pause_frac"]
+    pauseLvl = o["pause_level_frac"]
+    pauseGap = max(0, _mround(o["pause_gap_sec"] * fs))
+    swLoc = np.full(n0 + 1, np.nan)
+    for k in range(1, n0 + 1):
+        swLoc[k] = _nanmedian(swing[max(1, k - nbhd) : min(n0, k + nbhd) + 1])
+    troughLeft = np.zeros(n0 + 1, dtype=bool)
+    pauseLeft = np.zeros(n0 + 1, dtype=bool)
+    for k in range(1, n0 + 1):
+        ok = on[k]
+        wt = rp[max(1, ok - troughWin) : ok + 1]
+        troughLeft[k] = wt.min() <= -troughFrac * swLoc[k]
+        wp = rp[max(1, ok - pauseGap - pauseWin) : max(1, ok - pauseGap) + 1]
+        pauseLeft[k] = (wp.max() - wp.min()) <= pauseFrac * swLoc[k] and abs(
+            np.mean(wp)
+        ) <= pauseLvl * swLoc[k]
+    grp = np.zeros(n0 + 1, dtype=int)
+    head = np.zeros(n0 + 2, dtype=int)
+    g = 0
+    isTail = np.zeros(n0 + 1, dtype=bool)
+    isTroughHead = np.zeros(n0 + 1, dtype=bool)
+    removalRatio = np.full(n0 + 1, np.nan)
+    jOf = np.zeros(n0 + 1, dtype=int)
+    for j in range(1, nI + 1):
+        jOf[inh[j]] = j
+    for k in range(1, n0 + 1):
+        if isMinor[k]:
+            grp[k] = max(g, 1)
+            continue
+        j = jOf[k]
+        if j == 1 or not joinI[j]:
+            g += 1
+            grp[k] = g
+            head[g] = k
+            continue
+        h = head[g]
+        rr = pairR[inh[j - 1]]
+        if (not keepFirstOnly) and g > 1 and troughLeft[h] and pauseLeft[k]:
+            mv = np.nonzero(grp == g)[
+                0
+            ]  # the head and the rows it holds become the end of the breath before
+            grp[mv] = g - 1
+            isTail[mv] = True
+            isTroughHead[h] = True
+            removalRatio[h] = rr
+            grp[k] = g
+            head[g] = k
+        else:
+            grp[k] = g
+            removalRatio[k] = rr  # keep-first: the joining inhale is removed
+
+    # ---- build the merged rows ----
+    nK = int(grp.max())
+    out_on, out_end, out_pk, out_tr = [], [], [], []
+    keptRow, nP, nR, origRows = [], [], [], []
+    inA, exA = [], []
+    for q in range(1, nK + 1):
+        mem = np.nonzero(grp == q)[0]
+        kr, last = int(mem[0]), int(mem[-1])
+        keptRow.append(kr - 1)
+        nP.append(int(np.sum(~isMinor[mem] & ~isTail[mem])))
+        nR.append(mem.size)
+        origRows.append(mem - 1)
+        pkSample, trSample = pk[kr], trs[kr]
+        if mem.size > 1:
+            pc = mem[
+                ~isTail[mem]
+            ]  # a trough rebound taken over as the end of this breath is not its inhale peak
+            ip = int(np.argmax(x1[pk[pc]] - z1[pk[pc]]))
+            pkSample = pk[pc[ip]]
+            it = int(np.argmin(trY[mem]))
+            trSample = trs[mem[it]]
+        out_on.append(on[kr] - 1)
+        out_end.append(en[last] - 1)
+        out_pk.append(pkSample - 1)
+        out_tr.append(trSample - 1)
+        a, b = on[kr], hiEnd[last]
+        inA.append(areaI(a, b) / fs * 1000)
+        exA.append(areaE(a, b) / fs * 1000)
+    inA = np.array(inA)
+    exA = np.array(exA)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        exIn = exA / inA
+    merged = {
+        "onsets": np.array(out_on, dtype=int),
+        "ends": np.array(out_end, dtype=int),
+        "peaks": np.array(out_pk, dtype=int),
+        "troughs": np.array(out_tr, dtype=int),
+        "kept_row": np.array(keptRow, dtype=int),
+        "n_pulses": np.array(nP, dtype=int),
+        "n_rows": np.array(nR, dtype=int),
+        "inhale_area": inA,
+        "exhale_area": exA,
+        "ex_in_ratio": exIn,
+        "orig_rows": origRows,
+    }
+    nMinor = int(isMinor[1:].sum())
+    rule = (
+        "(2026-10-29a) an inhale is not a new breath when the exhale since the previous "
+        f"inhale is < {ex_frac:g} x that inhale (inhale = area above zero flow from the "
+        "previous onset to its first crossing below zero flow; exhale = area below zero "
+        "flow from that crossing to the onset, 0 without a crossing); the joined breath "
+        "keeps the earlier onset unless it has an exhale trough just before it and the "
+        "joining inhale a flat pause just before it (then the earlier onset ends the "
+        "breath before and the joining inhale starts the breath); engine onsets whose "
+        f"window holds neither an inhale nor an exhale (< {minor_frac:g} x the local "
+        f"median beyond a +-{dead_frac:g} x swing noise band), and small pulses that only "
+        f"lead into a >= {rest_sec:g}-s rest before the next inhale, join the breath before"
+    )
+    zA = z[on[1:] - 1]
+    info = {
+        "rule": rule,
+        "version": MERGE_VERSION,
+        "ex_frac": ex_frac,
+        "dead_frac": dead_frac,
+        "minor_frac": minor_frac,
+        "zero_flow": zmethod,
+        "zero_flow_frac_dwell": zfrac,
+        "n_before": n0,
+        "n_after": nK,
+        "n_minor": nMinor,
+        "n_lead_bumps": int(isLead[1:].sum()),
+        "n_merged": n0 - nK - nMinor,
+        "n_pulses": merged["n_pulses"],
+        "n_rows": merged["n_rows"],
+        "inhale_area": inA,
+        "exhale_area": exA,
+        "ex_in_ratio": exIn,
+        "orig_rows": origRows,
+        "is_minor": isMinor[1:].copy(),
+        "is_lead_bump": isLead[1:].copy(),
+        "pulse_inhale_area": Ik[1:] / fs * 1000,
+        "pair_ex_in_ratio": pairR[1:],
+        "engine_onset_sec": (on[1:] - 1) / fs,
+        "zero_flow_at_onsets": zA,
+        "dead_band": dRow[1:],
+        "pair_inhale_area": pairI[1:] / fs * 1000,
+        "pair_exhale_area": pairE[1:] / fs * 1000,
+        "pair_cross_sec": (pairX[1:] - 1) / fs,
+        "trough_left": troughLeft[1:],
+        "pause_left": pauseLeft[1:],
+        "is_trough_head": isTroughHead[1:],
+        "is_tail": isTail[1:],
+        "removal_ratio": removalRatio[1:],
+        "n_trough_heads": int(isTroughHead[1:].sum()),
+        "keep_opts": {
+            "trough_win_sec": troughWin / fs,
+            "trough_frac": troughFrac,
+            "pause_win_sec": pauseWin / fs,
+            "pause_frac": pauseFrac,
+            "pause_level_frac": pauseLvl,
+            "pause_gap_sec": pauseGap / fs,
+            "step3_mode": o["step3_mode"],
+            "keep_rule": o["keep_rule"],
+        },
+    }
+    return merged, info
+
+
+# the segment_breaths keyword of the same name shadows the function there
+_merge_stage = merge_incomplete_exhales
+
+
+def apply_onset_refinement(
+    rsp_stored: np.ndarray,
+    fs: float,
+    on_in: ArrayLike,
+    pk_in: ArrayLike,
+    tr_in: ArrayLike,
+    opts: Mapping[str, Any] | None,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Call ``refine_inhale_onsets`` on the detection's landmarks and CHECK
+    what comes back (no repair: a violation raises ``ValueError``): onsets
+    finite, inside the trace, strictly ascending; every onset has a peak
+    after it; two onsets never share a peak. Returns ``(onsets, record)``;
+    the record holds the detection's landmarks (``onsets_in`` ...), what went
+    into the pairing (``onsets_out`` ..., peaks and troughs unchanged), the
+    counts, ``rule`` / ``shift_ms`` aligned with ``onsets_out`` and the
+    refinement's own info as ``refine_fn``."""
+    on_in = np.asarray(on_in, dtype=float).ravel()
+    pk_in = np.asarray(pk_in, dtype=float).ravel()
+    tr_in = np.asarray(tr_in, dtype=float).ravel()
+    on, rinfo = refine_inhale_onsets(rsp_stored, fs, on_in, pk_in, tr_in, opts)
+    N = np.asarray(rsp_stored).size
+    pk = np.sort(pk_in).astype(int)
+    tr = np.sort(tr_in).astype(int)
+
+    def bad(msg: str) -> NoReturn:
+        raise ValueError(f"onset refinement result rejected: {msg}")
+
+    if np.any(on < 0) or np.any(on > N - 1):
+        bad("onsets must be finite and inside the trace")
+    if on.size != on_in.size:
+        bad(f"{on.size} onsets came back for {on_in.size}")
+    if np.any(np.diff(on) <= 0):
+        bad("onsets must be strictly ascending after rounding (duplicates)")
+    n_on = on.size
+    pair_pk = np.full(n_on, -1)
+    for k in range(n_on):
+        q = pk[pk > on[k]]
+        if q.size == 0:
+            bad(f"onset {k} (sample {on[k]}) has no peak after it")
+        pair_pk[k] = q[0]
+        if k < n_on - 1 and pair_pk[k] >= on[k + 1]:
+            bad(
+                f"onsets {k} and {k + 1} (samples {on[k]}, {on[k + 1]}) share the peak at sample {pair_pk[k]}"
+            )
+    first_in = []
+    for k in range(on_in.size):
+        q = pk_in[pk_in > on_in[k]]
+        if q.size:
+            first_in.append(q[0])
+    return on, {
+        "onsets_in": on_in.astype(int),
+        "peaks_in": pk_in.astype(int),
+        "troughs_in": tr_in.astype(int),
+        "onsets_out": on,
+        "peaks_out": pk,
+        "troughs_out": tr,
+        "n_on_in": on_in.size,
+        "n_on_out": n_on,
+        "n_peaks_in": pk_in.size,
+        "n_peaks_out": pk.size,
+        "n_orphan_peaks_in": pk_in.size - len(set(first_in)),
+        "n_orphan_peaks_out": pk.size - len(set(pair_pk.tolist())),
+        "rule": list(rinfo["rule"]),
+        "shift_ms": np.asarray(rinfo["shift_ms"], dtype=float),
+        "refine_fn": rinfo,
+    }
+
+
+def merge_paired_landmarks(
+    resp: ArrayLike,
+    fs: float,
+    onsets: ArrayLike,
+    peaks: ArrayLike,
+    troughs: ArrayLike,
+    ex_frac: float = 0.20,
+    opts: Mapping[str, Any] | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
+    """Apply ``merge_incomplete_exhales`` to the paired landmarks of
+    ``pair_breath_landmarks`` and return merged, equal-length landmarks.
+
+    The merge judges breaths 0..n-2 (windows ``[onsets[k], onsets[k+1])``);
+    the last paired inhale has no closing onset and is kept as it is. Each
+    merged breath's trough is the lowest member trough; where that trough
+    does not lie after the merged breath's peak (a trough rebound taken over
+    as the end of the previous breath) it is replaced by the lowest member
+    trough that does. Returns ``(onsets, peaks, troughs, record)`` with
+    ``record = {"merged", "info", "n_trough_guard"}`` (the outputs of
+    ``merge_incomplete_exhales``, and the number of breaths whose trough was
+    replaced); the output satisfies onset < peak < trough < next onset for
+    every breath but the last, else ``ValueError`` is raised.
+    """
+    x = _fillmissing_linear(resp)
+    on = np.asarray(onsets, dtype=int)
+    pk_a = np.asarray(peaks, dtype=int)
+    tr_a = np.asarray(troughs, dtype=int)
+    n = on.size
+    if n < 2:
+        raise ValueError("at least two paired breaths are needed to merge")
+    merged, info = merge_incomplete_exhales(
+        x, fs, on, pk_a[: n - 1], tr_a[: n - 1], ex_frac, opts
+    )
+    raw_bc0 = x - _movmean(x, _mround(60 * fs))
+    m_tr = merged["troughs"].copy()
+    n_guard = 0
+    for q in range(merged["onsets"].size):
+        if m_tr[q] <= merged["peaks"][q]:
+            cand = tr_a[merged["orig_rows"][q]]
+            cand = cand[cand > merged["peaks"][q]]
+            m_tr[q] = cand[int(np.argmin(raw_bc0[cand]))]
+            n_guard += 1
+    merged["troughs"] = m_tr
+    on_m = np.concatenate((merged["onsets"], on[n - 1 :]))
+    pk_m = np.concatenate((merged["peaks"], pk_a[n - 1 :]))
+    tr_m = np.concatenate((m_tr, tr_a[n - 1 :]))
+    ordered = (on_m[:-1] < pk_m[:-1]) & (pk_m[:-1] < tr_m[:-1]) & (tr_m[:-1] < on_m[1:])
+    if not np.all(ordered):
+        raise ValueError(
+            "merged landmarks are not in onset < peak < trough < next onset order"
+        )
+    record = {"merged": merged, "info": info, "n_trough_guard": n_guard}
+    return on_m, pk_m, tr_m, record
